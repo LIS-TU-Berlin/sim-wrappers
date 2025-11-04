@@ -12,7 +12,7 @@ def testActionReset(engine='mujoco'):
     if engine=='physx':
         S = ry.Simulation(C, engine=ry.SimulationEngine.physx, verbose=2)
     elif engine=='mujoco':
-        S = sim.MjSim(open('sample/twoFingers.xml', 'r').read(), C, view=False, tau_sim=tau_sim)
+        S = sim.MjSim(open('sample/twoFingers.xml', 'r').read(), C, use_mj_viewer=False, tau_sim=tau_sim)
     else:
         raise Exception(f'engine "{engine}" not defined')
 
@@ -28,7 +28,7 @@ def testActionReset(engine='mujoco'):
         # simulate a step
         S.resetSplineRef(ctrl_time=0.)
         S.setSplineRef(q_target.reshape(1,-1), [tau_spline], append=False)
-        S.step([], tau_step=tau_action, mode=ry.ControlMode.spline, view=1.)
+        S.step([], tau_step=tau_action, mode=ry.ControlMode.spline, view_speed=1.)
 
         # store result
         q1 = S.C.getJointState()
@@ -40,7 +40,7 @@ def testActionReset(engine='mujoco'):
             S.setState(x0)
             S.resetSplineRef(ctrl_time=0.)
             S.setSplineRef(q_target.reshape(1,-1), [tau_spline], append=False)
-            S.step([], tau_step=tau_action, mode=ry.ControlMode.spline, view=1.)
+            S.step([], tau_step=tau_action, mode=ry.ControlMode.spline, view_speed=1.)
 
             # compare result
             q2 = S.C.getJointState()

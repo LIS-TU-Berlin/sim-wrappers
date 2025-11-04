@@ -17,13 +17,13 @@ class MjSim:
     LQR_K = None
     LQR_const = None
 
-    def __init__(self, xml, C: ry.Config, view=True, tau_sim=0.01):
+    def __init__(self, xml, C: ry.Config, use_mj_viewer=True, tau_sim=0.01):
         self.model = mujoco.MjModel.from_xml_string(xml)
         self.data = mujoco.MjData(self.model)
         self.model.opt.timestep = tau_sim
         self.tau_sim = tau_sim
 
-        if view:
+        if use_mj_viewer:
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
         else:
             self.viewer = None
@@ -32,7 +32,7 @@ class MjSim:
         for f in C.getRoots():
             if 'mass' in f.asDict():
                 self.freeobjs.append(f)
-        print(f'-- initializing MjSim with {len(self.freeobjs)} free objects and joint dimension {C.getJointDimension()}')
+        print(f'-- initializing MjSim with {len(self.freeobjs)} free objects and joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} ctrl:{self.data.ctrl.size})')
         self.C = C
         self.pushConfigToSim()
 
@@ -41,6 +41,10 @@ class MjSim:
 
         self.ctrl_dim = self.data.ctrl.size
         self.resetSplineRef(0.)
+
+    def __del__(self):
+        if self.viewer is not None:
+            self.viewer.close()
 
     def pushConfigToSim(self):
         """[internal] (re)set the mujoco state to be equal to the self.C state"""
@@ -69,8 +73,8 @@ class MjSim:
         for i, f in enumerate(self.freeobjs):
             f.setPose(self.data.qpos[qn + 7 * i : qn + 7 * (i + 1)])
 
-    def multi_steps(self, steps, view=-1.):
-        viewSteps = math.ceil(0.03 / self.tau_sim / view)
+    def multi_steps(self, steps, view_speed=-1.):
+        viewSteps = math.ceil(0.03 / self.tau_sim / view_speed)
         for k in range(steps):
             if self.LQR_K is not None:
                 self.data.ctrl = self.data.qpos[:self.ctrl_dim]
@@ -81,19 +85,19 @@ class MjSim:
                 self.data.ctrl = ref[0]
             mujoco.mj_step(self.model, self.data)
             self.ctrl_time += self.tau_sim
-            if view>0. and ((k+1)%viewSteps==0 or k==steps-1):
+            if view_speed>0. and ((k+1)%viewSteps==0 or k==steps-1):
                 if self.viewer is not None:
                     self.viewer.sync()
                 self.pullConfigFromSim()
                 self.C.view(False, f"mujoco sim time: {self.data.time:6.3f}, ctrl time: {self.ctrl_time:6.3f}")
-                time.sleep(view * viewSteps * self.tau_sim)
+                time.sleep(view_speed * viewSteps * self.tau_sim)
         self.pullConfigFromSim()
 
-    def step(self, u, tau_step, mode, view):
+    def step(self, u, tau_step, mode=None, view_speed=-1.):
         """[core] step the physics engine"""
         steps = round(tau_step/self.tau_sim)
         assert math.isclose(tau_step, steps*self.tau_sim), 'tau_step needs to be a multiple of tau_sim'
-        self.multi_steps(steps, view)
+        self.multi_steps(steps, view_speed)
 
     def getState(self):
         """[core] get a state struct that allows exact reset"""
@@ -163,12 +167,3 @@ class MjSim:
             qpos[qn+7*i+4 : qn+7*i+7] = 0
         return qpos
 
-
-
-# sim = MjSim(xml, False, C)
-# for k in range(100):
-#     sim.run(.1, C, True)
-#     q = C.getJointState()
-#     q = q[:sim.ctrl_dim]
-#     q += .1 * np.random.randn(q.size)
-#     sim.ctrl.overwriteSmooth(q.reshape(1,-1), [.2], sim.sim_time)

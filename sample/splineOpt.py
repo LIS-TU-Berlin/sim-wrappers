@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import data_tools
 
 class ManipNLP:
-    view = -1.
+    view_speed = -1.
 
     def __init__(self, sim: sim.MjSim, target: sim.MjSimState, ctrl_pts: int):
         self.sim = sim
@@ -35,7 +35,7 @@ class ManipNLP:
         self.sim.resetSplineRef(ctrl_time=0.)
         self.sim.setSplineRef(splineX, splineT, append=False)
 
-        self.sim.step([], splineT[-1], ry.ControlMode.spline, view=self.view)
+        self.sim.step([], splineT[-1], ry.ControlMode.spline, view_speed=self.view_speed)
 
         x = self.sim.getState()
         self.sim.zeroQuatsFromQpos(x.qpos)
@@ -56,7 +56,7 @@ def testOpt(rnd_poses, engine='mujoco'):
     if engine=='physx':
         S = ry.Simulation(C, engine=ry.SimulationEngine.physx, verbose=2)
     elif engine=='mujoco':
-        S = sim.MjSim(open('sample/twoFingers.xml', 'r').read(), C, view=False, tau_sim=tau_sim)
+        S = sim.MjSim(open('sample/twoFingers.xml', 'r').read(), C, use_mj_viewer=False, tau_sim=tau_sim)
     else:
         raise Exception(f'engine "{engine}" not defined')
 
@@ -129,7 +129,7 @@ def testOpt(rnd_poses, engine='mujoco'):
     S.setState(x0)
     S.C.view(True, 'start')
 
-    nlp.view=1.
+    nlp.view_speed=1.
     phi, _ = nlp.evaluate(ret.x)
     S.C.view(True, 'end manip')
     x = S.getState()

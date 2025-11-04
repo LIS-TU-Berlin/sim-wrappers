@@ -10,7 +10,6 @@
   <default>
     <default class="slider">
       <position forcerange="-150 150" kp="100" kv="10" ctrlrange="-10 10"/>
-      <!-- <position forcerange="-150 150"/> -->
     </default>
     <default class="geom_fric">
       <geom friction = ".8 0.1 0.1"/>
