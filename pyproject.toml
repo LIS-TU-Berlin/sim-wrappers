@@ -1,0 +1,17 @@
+[project]
+name = "sim-wrappers"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Marc Toussaint", email = "toussaint@tu-berlin.de" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+sim-wrappers = "sim_wrappers:main"
+
+[build-system]
+requires = ["uv_build>=0.9.5,<0.10.0"]
+build-backend = "uv_build"
