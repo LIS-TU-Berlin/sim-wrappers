@@ -93,7 +93,7 @@ class MjSim:
                 time.sleep(view_speed * viewSteps * self.tau_sim)
         self.pullConfigFromSim()
 
-    def step(self, u, tau_step, mode=None, view_speed=-1.):
+    def step(self, tau_step, view_speed=-1.):
         """[core] step the physics engine"""
         steps = round(tau_step/self.tau_sim)
         assert math.isclose(tau_step, steps*self.tau_sim), 'tau_step needs to be a multiple of tau_sim'
