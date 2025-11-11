@@ -1,1 +1,1 @@
-from .MujocoSim import *
+from .mujoco_sim import *
