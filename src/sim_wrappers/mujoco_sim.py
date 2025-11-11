@@ -20,6 +20,7 @@ class MjSimState:
 
 
 class MjSim:
+    ctrl_time: float  # same as mj's state.time
     LQR_K: Array = None
     LQR_const: Array | float = None
 
@@ -31,6 +32,15 @@ class MjSim:
         tau_sim: bool = 1e-3,
         tau_step: bool = 5e-2
     ):
+        """
+        Basic simulation class that wraps a mujoco simulator and rai config.
+
+        :param xml_path: String or pathlike object that points to the xml file.
+        :param C: rai configuration of the scene.
+        :param use_mj_viewer: Use the mujoco native viewer.
+        :param tau_sim: Simulation step. Will be set so model.opt.timestep in mujoco equals this
+        :param tau_step: Control timestep.
+        """
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
         self.model.opt.timestep = tau_sim
@@ -63,7 +73,7 @@ class MjSim:
         self.ctrl_time = self.data.time
 
     def __del__(self):
-        if self.use_mj_viewer:
+        if hasattr(self, "viewer") and self.viewer is not None:
             self.viewer.close()
 
     def pushConfigToSim(self):
@@ -105,6 +115,7 @@ class MjSim:
             mujoco.mj_step(self.model, self.data)
             self.ctrl_time += self.tau_sim
 
+            # Visualization
             if view_speed > 0.0 and ((k + 1) % view_steps == 0 or k == steps - 1):
                 if self.use_mj_viewer:
                     self.viewer.sync()
@@ -116,8 +127,9 @@ class MjSim:
                 time.sleep(view_speed * view_steps * self.tau_sim)
         self.pullConfigFromSim()
 
-    def step(self, tau_step: float, view_speed: float = -1.0) -> None:
+    def step(self, tau_step: Optional[float] = None, view_speed: float = -1.0) -> None:
         """[core] step the physics engine"""
+        tau_step = self.tau_step if tau_step is None else tau_step
         steps = round(tau_step / self.tau_sim)
         assert math.isclose(
             tau_step, steps * self.tau_sim
