@@ -21,6 +21,9 @@ class MjSimState:
 
 class MjSim:
     ctrl_time: float  # same as mj's state.time
+    mj_steps = 0
+    save_steps = -1
+    save_qpos = []
     LQR_K: Array = None
     LQR_const: Array | float = None
 
@@ -113,7 +116,12 @@ class MjSim:
                 self.data.ctrl[:] = self.spline_ref.eval3(self.ctrl_time)[0]
 
             mujoco.mj_step(self.model, self.data)
+            self.mj_steps += 1
             self.ctrl_time += self.tau_sim
+
+            # storing the path
+            if self.save_steps>0 and (self.mj_steps%self.save_steps==0):
+                self.save_qpos.append(self.data.qpos.copy())
 
             # Visualization
             if view_speed > 0.0 and ((k + 1) % view_steps == 0 or k == steps - 1):
