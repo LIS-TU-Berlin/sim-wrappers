@@ -29,8 +29,8 @@ class MjSim:
         xml_path: str,
         C: ry.Config,
         use_mj_viewer: bool = True,
-        tau_sim: bool = 1e-3,
-        tau_step: bool = 5e-2
+        tau_sim: float = 1e-3,
+        tau_step: float = 5e-2
     ):
         """
         Basic simulation class that wraps a mujoco simulator and rai config.
