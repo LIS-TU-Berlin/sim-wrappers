@@ -2,6 +2,7 @@ from typing import Any
 
 import mujoco
 import numpy as np
+from pathlib import Path
 from chex import Array
 from gymnasium.spaces import Box, Dict
 from gymnasium_robotics.core import GoalEnv
