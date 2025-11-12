@@ -2,7 +2,8 @@ from typing import Any
 
 import mujoco
 import numpy as np
-from gymnasium.spaces import Box
+from gymnasium.spaces import Box, Dict
+from gymnasium_robotics.core import GoalEnv
 from numpy._typing import NDArray
 import robotic as ry
 
@@ -28,8 +29,8 @@ class MujocoGymWrapper(GymWrapper):
             engine="mujoco",
             observation_space=observation_space,
             action_space=action_space,
-            render_mode=render_mode,
         )
+        self.render_mode = render_mode
         self.sim = MjSim(xml_path, ry_cfg, use_mj_viewer=True, tau_sim=tau_sim)
         self.initial_time = self.data.time
         self.initial_qpos = np.copy(self.sim.data.qpos)
@@ -60,7 +61,7 @@ class MujocoGymWrapper(GymWrapper):
 
     def step(
         self, action: NDArray[np.float32]
-    ) -> tuple[MjSimState, np.float64, bool, bool, dict[str, np.float64]]:
+    ) -> tuple[MjSimState, np.float32, bool, bool, dict[str, Any]] :
         if np.array(action).shape != self.action_space.shape:
             raise ValueError("Action dimension mismatch")
 
@@ -97,3 +98,23 @@ class MujocoGymWrapper(GymWrapper):
     @property
     def data(self) -> mujoco.MjData:
         return self.sim.data
+
+
+class MujocoGymWrapperConditionalEnv(MujocoGymWrapper, GoalEnv):
+
+    def __init__(self, xml_path: str, ry_cfg: ry.Config, action_space: Any | None, observation_space: Any | None, tau_ctrl: float = 0.05, tau_sim: float = 0.001, render_mode: str | None = None):
+        super().__init__(xml_path, ry_cfg, action_space, observation_space, tau_ctrl, tau_sim, render_mode)
+
+    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None) -> tuple[MjSimState, dict[str, Any]]:
+        return super().reset(seed=seed, options=options)
+    
+    def step(self, action: NDArray[np.float32]) -> tuple[dict[str, NDArray[np.float32]], np.float32, bool, bool, dict[str, Any]]:
+        pass
+    
+    def compute_reward(
+            self, 
+            achieved_goal: NDArray[np.float32],
+            desired_goal: NDArray[np.float32],
+            info: dict[str, Any]) -> np.float32:
+        pass
+    

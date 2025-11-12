@@ -7,7 +7,12 @@ authors = [
     { name = "Marc Toussaint", email = "toussaint@tu-berlin.de" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "gymnasium>=1.2.2",
+    "gymnasium-robotics>=1.4.1",
+    "mujoco>=3.3.7",
+    "robotic>=0.3.4",
+]
 
 [project.scripts]
 sim-wrappers = "sim_wrappers:main"
