@@ -2,6 +2,7 @@ from typing import Any
 
 import mujoco
 import numpy as np
+from chex import Array
 from gymnasium.spaces import Box, Dict
 from gymnasium_robotics.core import GoalEnv
 from numpy._typing import NDArray
@@ -9,6 +10,35 @@ import robotic as ry
 
 from sim_wrappers.gym_wrapper import GymWrapper
 from sim_wrappers.mujoco_sim import MjSim, MjSimState
+
+
+def sim_move_targets(
+    q_target: Array,
+    q_ref: Array,
+    qvel_ref: Array,
+    time_cost: float = 5.,
+    overwrite: bool = True
+) -> tuple[Array, Array]:
+    """Simulates botop's moveTo with overwrite=True.
+    Can be used with any sim.
+
+    Params:
+        q_target: target qpos.
+        q_ref: current qpos.
+        qvel_ref: current qvel.
+        time_cost: penalty.
+        overwrite: Currently only supports True.
+    """
+    assert overwrite, "moveTo currently only supports overwrite == True."
+
+    dist = np.linalg.norm(q_ref - q_target) + 1e-4
+    vel = np.dot(qvel_ref, (q_target - q_ref)) / dist
+    t = (np.sqrt(6.0 * time_cost * dist + vel * vel) - vel) / time_cost
+    t = np.where(dist < 1e-4 or t < 0.1, 0.1, t)
+    path = q_target[np.newaxis, :]
+    times = [t]
+
+    return path, times
 
 
 class MujocoGymWrapper(GymWrapper):
