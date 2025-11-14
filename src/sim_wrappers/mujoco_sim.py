@@ -223,7 +223,7 @@ class MjSim:
         """[to be moved]"""
         qn = self.C.getJointDimension()
         for i in range(len(self.freeobjs)):
-            qpos[qn + 7 * i + 4 : qn + 7 * i + 7] = 0
+            qpos[qn + 7 * i + 3 : qn + 7 * i + 7] = 0
         return qpos
 
     @property
