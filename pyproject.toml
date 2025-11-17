@@ -13,7 +13,7 @@ dependencies = [
     "gymnasium-robotics>=1.4.1",
     "h5py>=3.15.1",
     "mujoco>=3.3.7",
-    "robotic>=0.3.4",
+    "robotic==0.3.4.dev6",
 ]
 
 [project.scripts]

@@ -2,7 +2,7 @@
 from typing import Optional
 from dataclasses import dataclass
 
-from chex import Array
+#from chex import Array
 import mujoco
 import mujoco.viewer
 import numpy as np
@@ -14,9 +14,9 @@ import robotic as ry
 @dataclass
 class MjSimState:
     time: float
-    qpos: Array
-    qvel: Array
-    act: Array
+    qpos: np.array
+    qvel: np.array
+    act: np.array
 
 
 class MjSim:
@@ -24,8 +24,8 @@ class MjSim:
     mj_steps = 0
     save_steps = -1
     save_qpos = []
-    LQR_K: Array = None
-    LQR_const: Array | float = None
+    LQR_K: np.array = None
+    LQR_const: np.array = None
 
     def __init__(
         self,
@@ -172,7 +172,7 @@ class MjSim:
         self.spline_ref.set(2, ref.reshape(1, -1), [ctrl_time])
         self.ctrl_time = ctrl_time
 
-    def setSplineRef(self, points: Array, times: Array, append: bool = False) -> None:
+    def setSplineRef(self, points: np.array, times: np.array, append: bool = False) -> None:
         """[core] set the spline; when overwriting, times are relative to the *current* ctrl_time"""
         if not append:
             self.spline_ref.overwriteSmooth(points, times, self.ctrl_time)
@@ -184,7 +184,7 @@ class MjSim:
         through_pd: bool = False,
         kp: Optional[float] = None,
         kd: Optional[float] = None,
-    ) -> tuple[Array, Array, Array]:
+    ) -> tuple[np.array, np.array, np.array]:
         """[to be moved]"""
         ref = self.spline_ref.eval3(self.ctrl_time)
         self.data.ctrl = ref[0]
@@ -204,7 +204,7 @@ class MjSim:
 
         return A, B, F.reshape(-1)
 
-    def getQPosWithoutQuatW(self) -> Array:
+    def getQPosWithoutQuatW(self) -> np.array:
         """[to be moved]"""
         qn = self.C.getJointDimension()
         nobj = len(self.freeobjs)
@@ -219,7 +219,7 @@ class MjSim:
             ]
         return qpos
 
-    def zeroQuatsFromQpos(self, qpos: Array) -> Array:
+    def zeroQuatsFromQpos(self, qpos: np.array) -> np.array:
         """[to be moved]"""
         qn = self.C.getJointDimension()
         for i in range(len(self.freeobjs)):
