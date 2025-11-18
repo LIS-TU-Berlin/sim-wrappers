@@ -22,6 +22,7 @@ class MjSimState:
 class MjSim:
     ctrl_time: float  # same as mj's state.time
     mj_steps = 0
+    view_speed = -1.
     save_steps = -1
     save_qpos = []
     LQR_K: np.array = None
@@ -32,8 +33,7 @@ class MjSim:
         xml_path: str,
         C: ry.Config,
         use_mj_viewer: bool = True,
-        tau_sim: float = 1e-3,
-        tau_step: float = 5e-2
+        tau_sim: float = 1e-3
     ):
         """
         Basic simulation class that wraps a mujoco simulator and rai config.
@@ -42,13 +42,11 @@ class MjSim:
         :param C: rai configuration of the scene.
         :param use_mj_viewer: Use the mujoco native viewer.
         :param tau_sim: Simulation step. Will be set so model.opt.timestep in mujoco equals this
-        :param tau_step: Control timestep.
         """
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
         self.model.opt.timestep = tau_sim
         self.tau_sim = tau_sim
-        self.tau_step = tau_step
         self.use_mj_viewer = use_mj_viewer
 
         if use_mj_viewer:
@@ -60,20 +58,16 @@ class MjSim:
         for f in C.getRoots():
             if "mass" in f.asDict():
                 self.freeobjs.append(f)
-        print(
-            f"-- initializing MjSim with {len(self.freeobjs)} free objects and joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} ctrl:{self.ctrl_dim})"
-        )
+        print(f"-- initializing MjSim with {len(self.freeobjs)} free objects and joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} ctrl:{self.ctrl_dim})")
         self.C = C
 
-        assert self.data.qpos.size == self.C.getJointDimension() + 7 * len(
-            self.freeobjs
-        )
+        assert self.data.qpos.size == self.C.getJointDimension() + 7 * len(self.freeobjs)
         assert self.ctrl_dim == self.C.getJointDimension()
+        assert self.data.time == 0.
 
         self.pushConfigToSim()
         self.spline_ref = ry.BSpline()
         self.resetSplineRef(0.0)
-        self.ctrl_time = self.data.time
 
     def __del__(self):
         if hasattr(self, "viewer") and self.viewer is not None:
@@ -101,8 +95,8 @@ class MjSim:
         for i, f in enumerate(self.freeobjs):
             f.setPose(self.data.qpos[self.q_dim + 7 * i : self.q_dim + 7 * (i + 1)])
 
-    def multi_steps(self, steps: int, view_speed: float=-1.0) -> None:
-        view_steps = math.ceil(0.03 / self.tau_sim / view_speed)
+    def multi_steps(self, steps: int) -> None:
+        view_steps = math.ceil(0.03 / self.tau_sim / self.view_speed)
         for k in range(steps):
             if self.LQR_K is not None:
                 ctrl = self.data.qpos[: self.ctrl_dim]
@@ -124,7 +118,7 @@ class MjSim:
                 self.save_qpos.append(self.data.qpos.copy())
 
             # Visualization
-            if view_speed > 0.0 and ((k + 1) % view_steps == 0 or k == steps - 1):
+            if self.view_speed > 0.0 and ((k + 1) % view_steps == 0 or k == steps - 1):
                 if self.use_mj_viewer:
                     self.viewer.sync()
                 self.pullConfigFromSim()
@@ -132,17 +126,17 @@ class MjSim:
                     False,
                     f"mujoco sim time: {self.data.time:6.3f}, ctrl time: {self.ctrl_time:6.3f}",
                 )
-                time.sleep(view_speed * view_steps * self.tau_sim)
+                time.sleep(self.view_speed * view_steps * self.tau_sim)
         self.pullConfigFromSim()
 
-    def step(self, tau_step: Optional[float] = None, view_speed: float = -1.0) -> None:
+    def step(self, tau_step: Optional[float] = None) -> None:
         """[core] step the physics engine"""
         tau_step = self.tau_step if tau_step is None else tau_step
         steps = round(tau_step / self.tau_sim)
         assert math.isclose(
             tau_step, steps * self.tau_sim
         ), "tau_step needs to be a multiple of tau_sim"
-        self.multi_steps(steps, view_speed)
+        self.multi_steps(steps)
 
     def getState(self) -> MjSimState:
         """[core] get a state struct that allows exact reset"""
