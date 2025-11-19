@@ -17,6 +17,9 @@ class MjSimState:
     qpos: np.array
     qvel: np.array
     act: np.array
+    
+    def as_vector(self):
+        return np.concat((np.array([self.time]), self.qpos, self.qvel, self.act))
 
 
 class MjSim:
@@ -48,6 +51,7 @@ class MjSim:
         self.model.opt.timestep = tau_sim
         self.tau_sim = tau_sim
         self.use_mj_viewer = use_mj_viewer
+        self.xml_file = xml_path
 
         if use_mj_viewer:
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
@@ -158,6 +162,10 @@ class MjSim:
         if self.use_mj_viewer:
             self.viewer.sync()
         self.pullConfigFromSim()
+
+    def to_state(self, x: np.array) -> MjSimState:
+        nq, nv = self.data.qpos.size, self.data.qvel.size
+        return MjSimState(x[0], x[1:1+nq], x[1+nq:1+nq+nv], x[1+nq+nv:])
 
     def resetSplineRef(self, ctrl_time: float = 0.) -> None:
         """[core] reset the spline; ctrl_time gives the *absolute* time (relating to mujoco's time state) of the spline knots"""

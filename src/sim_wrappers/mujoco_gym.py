@@ -57,8 +57,8 @@ class MujocoGym(gym.Env):
         return observation, info
 
     def step(self, action):
-        action = action.reshape(2, self.sim.ctrl_dim)
-        self.sim.setSplineRef(action, np.array([self.tau_step, 2.*self.tau_step]), append=False)
+        action = action.reshape(1, self.sim.ctrl_dim)
+        self.sim.setSplineRef(action, np.array([2.*self.tau_step]), append=False)
         self.sim.step(tau_step=self.tau_step)
   
         x = self.sim.getState()
@@ -82,7 +82,7 @@ class MujocoGym(gym.Env):
 
         return -np.sum(np.square(phi))
         
-    def rollout(self, pi, return_data=None, verbose=1):
+    def rollout(self, pi, return_data=False, verbose=1):
         '''helper to play and view a policy'''
         obs, info = self.reset()
 
@@ -92,32 +92,32 @@ class MujocoGym(gym.Env):
         else:
             self.sim.view_speed=-1.
 
+        if return_data:
+            data = {'state': [], 'obs': [], 'action': [], 'next_obs': [], 'reward': [], 'terminal': []}
+
         t = 0
         R = 0
-        if return_data:
-            data = {'obs': [], 'action': [], 'next_obs': [], 'reward': [], 'terminal': []}
         while True:
+            state = self.sim.getState().as_vector()
             action = pi(obs, t)
             next_obs, reward, terminated, truncated, info = self.step(action)
-            if data is not None:
+            if return_data:
+                data['state'].append(state)
                 data['obs'].append(obs)
                 data['action'].append(action)
                 data['next_obs'].append(next_obs)
                 data['reward'].append(np.array([reward]))
-                if terminated or truncated:
-                    data['terminal'].append(np.array([1.]))
-                else:
-                    data['terminal'].append(np.array([0.]))
+                data['terminal'].append(np.array([(1. if terminated or truncated else 0.)]))
             obs = next_obs
             R += reward
             t += 1
-            if verbose>0:
+            if verbose>1:
                 print("reward: ", reward)
             if terminated or truncated:
                 break
 
         if verbose>0:
-            print('total return:', R)
+            print('total (non-discounted) return:', R)
             self.sim.C.view(True, 'END')
         
         if return_data:
