@@ -14,4 +14,8 @@ z.*
 actparcmaes.par
 errcmaes.err
 
+# uv
 uv.lock
+
+# IDE
+.vscode/
