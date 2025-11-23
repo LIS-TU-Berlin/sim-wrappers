@@ -49,23 +49,20 @@ class MujocoGymWrapper(GymWrapper):
         ry_cfg: ry.Config,
         action_space: Box | None,
         observation_space: Box | None,
-        tau_ctrl: float = 5e-2,
+        tau_step: float = 5e-2,
         tau_sim: float = 1e-3,
         render_mode: str | None = None,
     ):
         super().__init__(
             xml_path=xml_path,
             ry_cfg=ry_cfg,
-            tau_ctrl=tau_ctrl,
+            tau_step=tau_step,
+            tau_sim=tau_sim,
             engine="mujoco",
             observation_space=observation_space,
             action_space=action_space,
         )
         self.render_mode = render_mode
-        self.sim = MjSim(xml_path, ry_cfg, use_mj_viewer=True, tau_sim=tau_sim)
-        self.initial_time = self.data.time
-        self.initial_qpos = np.copy(self.sim.data.qpos)
-        self.initial_qvel = np.copy(self.data.qvel)
 
     def reset(
         self,
@@ -74,18 +71,9 @@ class MujocoGymWrapper(GymWrapper):
         options: dict[str, Any] | None = None,
     ) -> tuple[MjSimState, dict[str, Any]]:
         super().reset(seed=seed)
-
-        mujoco.mj_resetData(self.model, self.data)
-        self.data.time = self.initial_time
-        self.data.qpos[:] = np.copy(self.initial_qpos)
-        self.data.qvel[:] = np.copy(self.initial_qvel)
-        if self.model.na != 0:
-            self.data.act[:] = None
-
-        mujoco.mj_forward(self.model, self.data)
-        self.sim.resetSplineRef(0.0)
-        self.sim.pullConfigFromSim()
-        state = self.sim.getState()
+        state = self.init_state
+        self.sim.setState(state)
+        self.sim.resetSplineRef(ctrl_time=0.)
         info = self.get_info(state)
 
         return state, info
@@ -98,7 +86,7 @@ class MujocoGymWrapper(GymWrapper):
 
         action = np.clip(action, self.action_space.low, self.action_space.high)
         self.sim.setSplineRef(action, times=self.spline_times)
-        self.sim.step(self.sim.tau_step)
+        self.sim.step(self.sim._tau_step)
         obs = self.get_obs()
         info = self.get_info(obs)
         terminated = self.compute_terminated(obs, info)
@@ -139,7 +127,7 @@ class MujocoGymWrapperConditionalEnv(MujocoGymWrapper, GoalEnv):
             ry_cfg: ry.Config, 
             action_space: Box | None, 
             observation_space: Dict | None, 
-            tau_ctrl: float = 0.05, 
+            tau_step: float = 0.05,
             tau_sim: float = 0.001, 
             render_mode: str | None = None,
             configs_pth: str | Path = "",
@@ -151,7 +139,7 @@ class MujocoGymWrapperConditionalEnv(MujocoGymWrapper, GoalEnv):
             sparse: bool = False,
             verbose:int = 0,
             ):
-        super().__init__(xml_path, ry_cfg, action_space, observation_space, tau_ctrl, tau_sim, render_mode)
+        super().__init__(xml_path, ry_cfg, action_space, observation_space, tau_step, tau_sim, render_mode)
 
         self.configs = h5py.File(configs_pth, 'r')
         self.config_count = self.configs["qpos"].shape[0]
@@ -239,7 +227,7 @@ class MujocoGymWrapperConditionalEnv(MujocoGymWrapper, GoalEnv):
 
         action = np.clip(action, self.action_space.low, self.action_space.high)
         self.sim.setSplineRef(action, times=self.spline_times)
-        self.sim.step(self.sim.tau_step)
+        self.sim.step(self.sim._tau_step)
         self.iter += 1
 
         obs = self.get_obs()

@@ -1,4 +1,3 @@
-from abc import ABCMeta
 from typing import Any, SupportsFloat, Literal
 
 import numpy as np
@@ -8,7 +7,7 @@ import robotic as ry
 from sim_wrappers.mujoco_sim import MjSim, MjSimState
 
 
-class GymWrapper(GymEnv, ABCMeta):
+class GymWrapper(GymEnv):
 
     def __init__(
         self,
@@ -17,22 +16,22 @@ class GymWrapper(GymEnv, ABCMeta):
         action_space: Space | None,
         observation_space: Space | None,
         engine: Literal["mujoco", "physx"] = "mujoco",
-        tau_ctrl: float = 5e-2,
+        tau_step: float = 5e-2,
         tau_sim: float = 1e-3,
     ):
         super().__init__()
         if engine == 'physx':
             self.sim = ry.Simulation(ry_cfg, engine=ry.SimulationEngine.physx, verbose=0)
         elif engine == 'mujoco':
-            self.sim = MjSim(xml_path, ry_cfg, use_mj_viewer=True, tau_sim=tau_sim)
+            self.sim = MjSim(xml_path, ry_cfg, use_mj_viewer=False, tau_sim=tau_sim)
         else:
             raise Exception(f'engine "{engine}" not defined')
 
-        self.tau_ctrl = tau_ctrl
+        self._tau_step = tau_step
         self.observation_space = observation_space
         self.action_space = action_space
-        self.q0 = self.sim.getState()
-        self.spline_times = np.linspace(0., tau_sim, int(tau_ctrl / tau_sim))
+        self.init_state = self.sim.getState()
+        self.spline_times = np.array([2. * self._tau_step])  # taken from mujoco_gym
 
     def reset(
         self,
@@ -40,8 +39,9 @@ class GymWrapper(GymEnv, ABCMeta):
         seed: int | None = None,
         options: dict[str, Any] | None = None,
     ) -> tuple[MjSimState, dict[str, Any]]:
-        self.sim.resetSplineRef()
-        self.sim.setState(self.q0)
+        super().reset(seed=seed)
+        self.sim.resetSplineRef(0.)
+        self.sim.setState(self.init_state)
         return self.sim.getState(), {}
 
     def step(
@@ -53,7 +53,15 @@ class GymWrapper(GymEnv, ABCMeta):
         pass
 
     def close(self):
-        self.sim.__del__()
+        self.__del__()
 
     def unwrapped(self) -> MjSim:
         return self.sim
+
+    def __del__(self):
+        if hasattr(self, "sim") and self.sim is not None:
+            del self.sim
+
+    @property
+    def tau_step(self):
+        return self._tau_step
