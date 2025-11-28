@@ -27,7 +27,8 @@ def main(args):
         engine='mujoco',
         start_id=-1,
         goal_id=-1,
-        camera=args.camera
+        camera=args.camera,
+        ctrl_lim=0.3,
     )
 
     # SB3 check_env
@@ -48,7 +49,7 @@ def main(args):
         print("Render OK. Image shape:", img.shape)
         plt.imshow(img)
         plt.show()
-        
+
     print("Running a single rollout...")
     while not done and step_count < 10:
         action = env.action_space.sample()

@@ -347,12 +347,12 @@ class MujocoGymGoal(GoalEnv):
 
     def step(self, action):
 
-        action = action.reshape(1, self.sim.ctrl_dim) # TODO: Actions seem to be too big
+        action = action.reshape(self.num_ctrl_pts, self.sim.ctrl_dim) # TODO: Actions seem to be too big
 
-        # self.sim.setSplineRef(action, np.array([self.tau_step]), append=False)
-        self.sim.setSplineRef(action, np.array([self.tau_step]), append=False) # TODO: What to do here? Is 2 needed?
-        
-        self.sim.step(tau_step=self.tau_step)
+        #self.sim.setSplineRef(_action, np.array([2.*self.tau_step]), append=False) # TODO: What to do here? Is 2 needed?
+        self.sim.setSplineRef(action, np.array([(i+1) * self.tau_step for i in range(self.num_ctrl_pts)]), append=False) # TODO: Using spline ref properly, movement is smoother
+
+        self.sim.step(tau_step=self.num_ctrl_pts*self.tau_step) # TODO: Using spline ref properly, movement is smoother
   
         x = self.sim.getState()
         #assert x.time == self.sim.ctrl_time, f"why not?{x.time} == {self.sim.ctrl_time}" # TODO This assert does not work
