@@ -5,6 +5,17 @@ import matplotlib.pyplot as plt
 
 from sim_wrappers.mujoco_gym import MujocoGymGoal
 
+def feature_map(qpos, qvel, scale_obj=2., scale_q=1.):
+
+    # object position - last 3 positions of qpos
+    z_obj = qpos[-3:]
+
+    # robot angles (=finger position) - everything before last 3 positions
+    z_q = qpos[:-3]
+
+    # scaled concatenation
+    return np.concat((scale_obj*z_obj, scale_q*z_q))
+        
 def main(args):
 
     env = MujocoGymGoal(
@@ -12,7 +23,10 @@ def main(args):
         xml_path=args.xml_path,
         scene_path=args.scene_path,
         sparse_r_thr=args.sparse_r_thr,
-        feature_map=lambda x: x  # simple identity map for testing
+        feature_map=feature_map,
+        engine='mujoco',
+        start_id=-1,
+        goal_id=-1,
     )
 
     # SB3 check_env

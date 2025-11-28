@@ -173,11 +173,12 @@ class MujocoGymGoal(GoalEnv):
         tau_step:float = 0.05, 
         time_limit:float=1.,
         feature_map:Any=None, 
-        feature_target:Any=None, # TODO remove
         ctrl_lim:float|None=1.0,
         num_ctrl_pts:int=1,
         img_h:int=240,
         img_w:int=320,
+        goal_not_on_table=True,
+        verbose=1,
         ):
 
         super().__init__() 
@@ -193,11 +194,12 @@ class MujocoGymGoal(GoalEnv):
         self.tau_step = tau_step
         self.time_limit = time_limit
         self.feature_map = feature_map
-        self.feature_target = feature_target
         self.ctrl_lim = ctrl_lim
         self.num_ctrl_pts = num_ctrl_pts
         self.img_h = img_h
         self.img_w = img_w
+        self.goal_not_on_table = goal_not_on_table
+        self.verbose = verbose
 
         # Load config
         self.config = ConfigsFile(self.config_path)
@@ -210,9 +212,16 @@ class MujocoGymGoal(GoalEnv):
             self.x0.time = 0.
 
         # define the observation space (see also observation_fct())
-        # TODO - obs contains qpos,qvel for x and goal
-        obs_shape = (self.x0.qpos.size + self.x0.qvel.size + self.x0.qpos.size + self.x0.qvel.size,)
-        goal_shape = (self.x0.qpos.size + self.x0.qvel.size,)
+        # obs contains qpos,qvel for x and goal
+        # obs consists of x.qpos (10,), x.qvel (9,), goal/feature target (6)
+
+        # Shape of feature_target is determined by self.feature_map
+        # We just need the shapes here
+        goal_size = self.feature_map(self.x0.qpos, self.x0.qvel).size
+
+        obs_shape = (self.x0.qpos.size + self.x0.qvel.size + goal_size,)
+        goal_shape = (goal_size,)
+
         self.observation_space = Dict(
             dict(
                 observation=Box(
@@ -253,7 +262,7 @@ class MujocoGymGoal(GoalEnv):
 
         C = ry.Config()
         C.addFile(self.scene_path)
-        #C.getFrame('obj').unLink() #different between 'analytical' model and sim: the ball is free in sim
+        C.getFrame('obj').unLink() #different between 'analytical' model and sim: the ball is free in sim
 
         if self.engine=='mujoco':
             self.sim = MjSim(
@@ -272,6 +281,12 @@ class MujocoGymGoal(GoalEnv):
             raise Exception(f'engine "{self.engine}" not defined')
                 
 
+    def set_sim_state_to_config(self, q) -> MjSimState:
+        self.sim.C.setJointState(q[:-3])
+        self.sim.C.getFrame('obj').setPosition(q[-3:])
+        self.sim.pushConfigToSim()
+        return self.sim.getState()
+
     def reset(self, seed=None, options=None):
         if seed is not None:
             super().reset(seed=int(seed))
@@ -279,62 +294,85 @@ class MujocoGymGoal(GoalEnv):
             # ry.rnd_seed(seed)
 
         # Choose start and end configurations
-        config_count = self.config.qpos.shape[0]
-        _start_id, _goal_id = random.sample(range(config_count), 2)
-        start_id = self.start_id if self.start_id != -1 else _start_id
-        goal_id = self.goal_id if self.goal_id != -1 else _goal_id
+        config_count = self.config.q.shape[0]
 
-        # Set the initial state from config
-        self.x0 = self.sim.getState()
-        self.x0.time = 0.0
-        self.x0.qpos = self.config.qpos[start_id]
-        self.x0.qvel = np.zeros_like(self.x0.qvel)
-        self.x0.act = np.zeros_like(self.x0.act)
+        # Set starting config
+        if self.start_id != -1:
+            # Using hardcoded value from config
+            start_id = self.start_id
+        else:
+            # Randomly
+            start_id = random.sample(range(config_count), 1)[0]
 
-        self.sim.setState(self.x0)
+        # Set goal config
+        if self.goal_id != -1:
+            # Using hardcoded value from config
+            goal_id = self.goal_id
+        else:
+            # Randomly
+            while True:
+                goal_id = random.sample(range(config_count), 1)[0]
+
+                if self.goal_not_on_table:
+                    # Break if a goal is found that is different from start and has no contact with table
+                    if goal_id != start_id and 5 not in self.config.contacts[goal_id]:
+                        break
+                else:
+                    # Break if a goal is found that is different from start
+                    if goal_id != start_id:
+                        break
+
+        if self.verbose > 0:
+            print(f'start_id: {start_id}, goal_id: {goal_id}')
+
         self.sim.resetSplineRef(ctrl_time=0.)
 
-        # Set the goal qpos
-        self.goal = self.sim.getState()
-        self.goal.time = 0.0  # TODO Not sure if this is ok or used
-        self.goal.qpos = self.config.qpos[goal_id]
-        self.goal.qvel = np.zeros_like(self.goal.qvel)
-        self.goal.act = np.zeros_like(self.goal.act)
+        # Set the goal
+        # Here we just want the state, the sim state will be set to the init config later
+        q1 = self.config.q[goal_id]
+        x1 = self.set_sim_state_to_config(q1)
+        self.goal = self.feature_map(x1.qpos, x1.qvel) # Use feature map to compute goal
 
-        obs_dict = self.observation_fct(self.x0, self.goal)
+        # Set the initial state from config
+        # This needs to be after setting the goal as the sim state should be set to q0
+        q0 = self.config.q[start_id]
+        self.x0 = self.set_sim_state_to_config(q0)
+
+        obs_dict = self.observation_fct(self.x0)
         info = {"start_id": start_id, "goal_id": goal_id}
         
         return obs_dict, info
 
     def step(self, action):
 
-        action = action.reshape(1, self.sim.ctrl_dim)
-        self.sim.setSplineRef(action, np.array([self.tau_step]), append=False)
+        action = action.reshape(1, self.sim.ctrl_dim) # TODO: Actions seem to be too big
+
+        # self.sim.setSplineRef(action, np.array([self.tau_step]), append=False)
+        self.sim.setSplineRef(action, np.array([self.tau_step]), append=False) # TODO: What to do here? Is 2 needed?
+        
         self.sim.step(tau_step=self.tau_step)
   
         x = self.sim.getState()
-        assert x.time == self.sim.ctrl_time, "why not?"
+        #assert x.time == self.sim.ctrl_time, f"why not?{x.time} == {self.sim.ctrl_time}" # TODO This assert does not work
 
-        info = {"no": "additional info"}
-
-        obs_dict = self.observation_fct(x, self.goal)
-
+        info = {}
+        obs_dict = self.observation_fct(x)
         reward = self.compute_reward(
             achieved_goal=obs_dict['achieved_goal'],
             desired_goal=obs_dict['desired_goal'],
             info=info
         )
-
         terminated = False
         truncated = (self.sim.ctrl_time >= self.time_limit) # terminated and truncated difference is super important
         
         return obs_dict, reward, terminated, truncated, info
     
-    def observation_fct(self, x: MjSimState, goal: MjSimState):
+    def observation_fct(self, x: MjSimState):
 
-        obs = np.concatenate((x.qpos, x.qvel, goal.qpos, goal.qvel)).astype(np.float32)
-        ach_goal = np.concatenate((x.qpos, x.qvel)).astype(np.float32)
-        des_goal = np.concatenate((goal.qpos, goal.qvel)).astype(np.float32)
+        obs = np.concatenate((x.qpos, x.qvel, self.goal)).astype(np.float32)
+
+        ach_goal = self.feature_map(x.qpos, x.qvel).astype(np.float32)
+        des_goal = self.goal.copy().astype(np.float32)
 
         obs_dict = {
             "observation": obs,
@@ -355,12 +393,9 @@ class MujocoGymGoal(GoalEnv):
         
         assert self.feature_map is not None, "rewards w/o feature_map undefined"
 
-        # Map goals into feature space
-        z_0 = self.feature_map(achieved_goal)
-        z_goal = self.feature_map(desired_goal)
-
+        # Goals are already in feature space
         # phi shape: (D,) for single, (N, D) for batch
-        phi = z_0 - z_goal
+        phi = achieved_goal - desired_goal
 
         # squared error per example
         if phi.ndim == 1:
@@ -415,7 +450,7 @@ class MujocoGymGoal(GoalEnv):
             R += reward
             t += 1
             if verbose>1:
-                print("reward: ", reward)
+                print("reward: ", reward, "action:", action)
             if terminated or truncated:
                 break
 
