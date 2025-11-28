@@ -178,6 +178,7 @@ class MujocoGymGoal(GoalEnv):
         img_h:int=240,
         img_w:int=320,
         goal_not_on_table=True,
+        camera='cam0',
         verbose=1,
         ):
 
@@ -199,6 +200,7 @@ class MujocoGymGoal(GoalEnv):
         self.img_h = img_h
         self.img_w = img_w
         self.goal_not_on_table = goal_not_on_table
+        self.camera = camera
         self.verbose = verbose
 
         # Load config
@@ -466,12 +468,14 @@ class MujocoGymGoal(GoalEnv):
     def render(self):
         '''also part of the env.Gym'''
 
+        assert self.camera is not None and self.camera != ''
+
         # TODO: Maybe make rendering more flexible (zoom, etc.) later
         if self.render_mode == 'rgb_array':
             #return self.sim.C.gl().getImage()
             with mujoco.Renderer(self.sim.model, height=self.img_h, width=self.img_w) as renderer:
                 mujoco.mj_forward(self.sim.model, self.sim.data)
-                renderer.update_scene(self.sim.data)
+                renderer.update_scene(self.sim.data, camera=self.camera)
                 return renderer.render()
         elif self.render_mode == 'human':
             self.sim.C.view(False, f'RoboticGym time {self.sim.data.time} / {self.time_limit}')

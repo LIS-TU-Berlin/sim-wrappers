@@ -27,6 +27,7 @@ def main(args):
         engine='mujoco',
         start_id=-1,
         goal_id=-1,
+        camera=args.camera
     )
 
     # SB3 check_env
@@ -38,6 +39,16 @@ def main(args):
     obs, _ = env.reset()
     done = False
     step_count = 0
+
+    # Rendering
+    if hasattr(env, "render_mode"):
+        env.render_mode = "rgb_array"
+        img = env.render()
+        assert isinstance(img, np.ndarray), "Render did not return an image"
+        print("Render OK. Image shape:", img.shape)
+        plt.imshow(img)
+        plt.show()
+        
     print("Running a single rollout...")
     while not done and step_count < 10:
         action = env.action_space.sample()
@@ -52,14 +63,6 @@ def main(args):
 
     print(f"Rollout finished after {step_count} steps. Rewards and obs OK.")
 
-    # Rendering
-    if hasattr(env, "render_mode"):
-        env.render_mode = "rgb_array"
-        img = env.render()
-        assert isinstance(img, np.ndarray), "Render did not return an image"
-        print("Render OK. Image shape:", img.shape)
-        plt.imshow(img)
-
     env.close()
     print("Environment check completed successfully!")
 
@@ -70,6 +73,7 @@ if __name__ == "__main__":
     parser.add_argument("--xml_path", type=str, required=True)
     parser.add_argument("--scene_path", type=str, required=True)
     parser.add_argument("--sparse_r_thr", type=float, default=10.0)
+    parser.add_argument("--camera", type=str, default='cam0')
     
     args = parser.parse_args()
     main(args)
