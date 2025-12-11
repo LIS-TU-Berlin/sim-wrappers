@@ -28,8 +28,7 @@ class MjSim:
     view_speed = -1.
     save_steps = -1
     save_qpos = []
-    LQR_K: np.array = None
-    LQR_const: np.array = None
+    ctrl_costs = 0.
 
     def __init__(
         self,
@@ -102,20 +101,13 @@ class MjSim:
     def multi_steps(self, steps: int) -> None:
         view_steps = math.ceil(0.03 / self.tau_sim / self.view_speed)
         for k in range(steps):
-            if self.LQR_K is not None:
-                ctrl = self.data.qpos[: self.ctrl_dim]
-                feedback = (
-                    self.LQR_K
-                    @ np.concatenate((self.getQPosWithoutQuatW(), self.data.qvel))
-                    + self.LQR_const
-                )
-                self.data.ctrl[:] = ctrl + 1.0 * feedback
-            else:
-                self.data.ctrl[:] = self.spline_ref.eval3(self.ctrl_time)[0]
+            ## [older version had option for an LQR here -> if needed, redo this with option to set K matrix relative to spline ref]
+            self.data.ctrl[:] = self.spline_ref.eval3(self.ctrl_time)[0]
 
             mujoco.mj_step(self.model, self.data)
             self.mj_steps += 1
             self.ctrl_time += self.tau_sim
+            self.ctrl_costs += np.sum(np.square(self.data.actuator_force))
 
             # storing the path
             if self.save_steps>0 and (self.mj_steps%self.save_steps==0):
@@ -148,7 +140,7 @@ class MjSim:
             time=self.data.time,
             qpos=self.data.qpos.copy(),
             qvel=self.data.qvel.copy(),
-            act=self.data.act.copy(),
+            act=self.data.actuator_force.copy(),
         )
 
     def setState(self, state: MjSimState) -> None:
@@ -156,7 +148,7 @@ class MjSim:
         self.data.time = state.time
         self.data.qpos[:] = state.qpos
         self.data.qvel[:] = state.qvel
-        self.data.act[:] = state.act
+        self.data.actuator_force[:] = state.act
         mujoco.mj_forward(self.model, self.data)
         self.ctrl_time = state.time
         if self.use_mj_viewer:

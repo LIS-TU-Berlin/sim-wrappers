@@ -57,8 +57,9 @@ class MujocoGym(gym.Env):
         return observation, info
 
     def step(self, action):
-        action = action.reshape(1, self.sim.ctrl_dim)
-        self.sim.setSplineRef(action, np.array([2.*self.tau_step]), append=False)
+        ctrl_ref = action.reshape(1, self.sim.ctrl_dim).copy()
+        ctrl_ref += self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # NEW! relativ        
+        self.sim.setSplineRef(ctrl_ref, np.array([2.*self.tau_step]), append=False)
         self.sim.step(tau_step=self.tau_step)
   
         x = self.sim.getState()
@@ -93,18 +94,20 @@ class MujocoGym(gym.Env):
             self.sim.view_speed=-1.
 
         if return_data:
-            data = {'state': [], 'obs': [], 'action': [], 'next_obs': [], 'reward': [], 'terminal': []}
+            data = {'state': [], 'obs': [], 'action': [], 'ctrl_cost': [], 'next_obs': [], 'reward': [], 'terminal': []}
 
         t = 0
         R = 0
         while True:
             state = self.sim.getState().as_vector()
             action = pi(obs, t)
+            self.sim.ctrl_costs=0.
             next_obs, reward, terminated, truncated, info = self.step(action)
             if return_data:
                 data['state'].append(state)
                 data['obs'].append(obs)
                 data['action'].append(action)
+                data['ctrl_cost'].append(self.sim.ctrl_costs)
                 data['next_obs'].append(next_obs)
                 data['reward'].append(np.array([reward]))
                 data['terminal'].append(np.array([(1. if terminated or truncated else 0.)]))
