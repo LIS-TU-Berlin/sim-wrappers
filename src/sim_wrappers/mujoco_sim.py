@@ -157,6 +157,7 @@ class MjSim:
 
     def to_state(self, x: np.array) -> MjSimState:
         nq, nv = self.data.qpos.size, self.data.qvel.size
+        assert x.size==1+nq+nv+self.ctrl_dim, "wrong size"
         return MjSimState(x[0], x[1:1+nq], x[1+nq:1+nq+nv], x[1+nq+nv:])
 
     def resetSplineRef(self, ctrl_time: float = 0.) -> None:
@@ -220,6 +221,14 @@ class MjSim:
             qpos[qn + 7 * i + 3 : qn + 7 * i + 7] = 0
         return qpos
 
+    @property
+    def qpos_dim(self) -> int:
+        return self.data.qpos.size
+    
+    @property
+    def qvel_dim(self) -> int:
+        return self.data.qvel.size
+    
     @property
     def ctrl_dim(self) -> int:
         return self.data.ctrl.size

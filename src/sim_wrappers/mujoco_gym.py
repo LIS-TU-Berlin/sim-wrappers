@@ -13,30 +13,47 @@ class MujocoGym(gym.Env):
     render_mode = 'human'
 
     def __init__(self, sim: MjSim, tau_step: float = 0.05, time_limit=1.,
-                 feature_map = None, feature_target=None):
+                 goal_map = None):
         self.sim = sim
-        self.x0 = self.sim.getState()
-        if self.x0.time > 0.:
+        x0 = self.sim.getState()
+        if x0.time > 0.:
             print('WARNING: initial sim has time>0 ... resetting this to 0')
-            self.x0.time = 0.
+            x0.time = 0.
 
         self.tau_step = tau_step
-        self.feature_map = feature_map
-        self.feature_target = feature_target
-        
+        self.goal_map = goal_map
+        self.goal_eps = 1e-3
+        self.cost_const = 0.5
         self.time_limit = time_limit
 
-        position_min_max = 1.
-
         # define the observation space (see also observation_fct())
-        self.observation_space = gym.spaces.Box(-2., +2., shape=(self.x0.qpos.size + self.x0.qvel.size,), dtype=np.float32)
+        observation_dim = self.sim.qpos_dim + self.sim.qvel_dim
+        if goal_map is not None:
+            self.goal_dim = self.goal_map(self.observation_fct(x0)).size
+            observation_dim += self.goal_dim
+        self.observation_space = gym.spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
 
         # define the action space
-        num_ctrl_pts = 2
-        self.action_space = gym.spaces.Box(-position_min_max, +position_min_max, shape=(num_ctrl_pts*self.sim.ctrl_dim,), dtype=np.float32)
+        action_min_max = 1.
+        num_ctrl_pts = 1
+        action_dim = num_ctrl_pts*self.sim.ctrl_dim
+        self.action_space = gym.spaces.Box(-action_min_max, +action_min_max, shape=(action_dim,), dtype=np.float32)
 
     def __del__(self):
         del self.sim
+
+    def set_start_goal(self, start: MjSimState, goal: MjSimState):
+        self.starts = start.as_vector().reshape(1,-1)
+        self.goals = self.goal_map(self.observation_fct(goal)).reshape(1,-1)
+
+    def set_starts_goals(self, starts: np.array, goals: np.array):
+        assert starts.shape[0]==goals.shape[0]
+        self.starts = starts
+        self.goals = goals
+        # np.empty((goals.shape[0], self.goal_dim))
+        # for i in range(goals.shape[0]):
+        #     x = self.sim.to_state(goals[i])
+        #     self.goals[i] = self.goal_map(self.observation_fct(x))
 
     def reset(self, seed=None, options=None):
         if seed is not None:
@@ -44,7 +61,12 @@ class MujocoGym(gym.Env):
             # np.random.seed(seed)
             # ry.rnd_seed(seed)
 
-        self.sim.setState(self.x0)
+        i = np.random.randint(0, self.starts.shape[0])
+        t = np.random.randint(0, self.starts.shape[1])
+        self.goal = self.goals[i,t]
+        x0 = self.sim.to_state(self.starts[i,t])
+        x0.time = 0.
+        self.sim.setState(x0)
         self.sim.resetSplineRef(ctrl_time=0.)
 
         # if self.random_reset:
@@ -52,7 +74,7 @@ class MujocoGym(gym.Env):
         #     self.box_pos0 = np.array([.0,-.1,.7]) + .7 * np.random.rand(3)
         #     self.box_pos0[2]=.7
 
-        observation = self.observation_fct(self.x0)
+        observation = self.observation_fct(x0)
         info = {"no": "additional info"}
         return observation, info
 
@@ -60,28 +82,48 @@ class MujocoGym(gym.Env):
         ctrl_ref = action.reshape(1, self.sim.ctrl_dim).copy()
         ctrl_ref += self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # NEW! relativ        
         self.sim.setSplineRef(ctrl_ref, np.array([2.*self.tau_step]), append=False)
+
+        # reward and truncation depends on x_now, not x_next!!
+        x_now = self.sim.getState()
+        obs_now = self.observation_fct(x_now)
+        reward = self.reward_fct(obs_now)
+        terminated = self.is_goal(obs_now)
+
         self.sim.step(tau_step=self.tau_step)
   
-        x = self.sim.getState()
-        assert x.time == self.sim.ctrl_time, "why not?"
+        x_next = self.sim.getState()
+        assert x_next.time == self.sim.ctrl_time, "why not?"
 
-        observation = self.observation_fct(x)
-        reward = self.reward_fct(x)
-        terminated = False
+        obs_next = self.observation_fct(x_next)
         truncated = (self.sim.ctrl_time >= self.time_limit) # terminated and truncated difference is super important
         info = {"no": "additional info"}
-        return observation, reward, terminated, truncated, info
+        return obs_next, reward, terminated, truncated, info
+    
+    def goal_from_state_vec(self, state):
+        x = self.sim.to_state(state)
+        obs = self.observation_fct(x)
+        return self.goal_map(obs)
     
     def observation_fct(self, x: MjSimState):
-        return np.concatenate((x.qpos, x.qvel))
+        obs = np.concatenate((x.qpos, x.qvel))
+        if self.has_wrapper_attr('goal'):
+            obs = np.concatenate((obs, self.goal))
+        return obs
 
-    def reward_fct(self, x: MjSimState):
-        assert self.feature_map is not None, "rewards w/o feature_map undefined"
+    def is_goal(self, obs):
+        err = np.linalg.norm(self.goal_map(obs)-self.goal)
+        # print('err', err)
+        if err <= self.goal_eps:
+            return True
+        return False
 
-        z = self.feature_map(x.qpos, x.qvel)
-        phi = z - self.feature_target
-
-        return -np.sum(np.square(phi))
+    def reward_fct(self, obs):
+        if self.is_goal(obs):
+            return 1.
+        return -self.tau_step * self.cost_const
+        # z = self.feature_map(obs)
+        # phi = z - self.feature_target
+        # return -np.sum(np.square(phi))
         
     def rollout(self, pi, return_data=False, verbose=1):
         '''helper to play and view a policy'''
