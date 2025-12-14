@@ -61,7 +61,6 @@ class MjSim:
         for f in C.getRoots():
             if "mass" in f.asDict():
                 self.freeobjs.append(f)
-        print(f"-- initializing MjSim with {len(self.freeobjs)} free objects and joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} ctrl:{self.ctrl_dim})")
         self.C = C
 
         assert self.data.qpos.size == self.C.getJointDimension() + 7 * len(self.freeobjs)
@@ -71,6 +70,8 @@ class MjSim:
         self.pushConfigToSim()
         self.spline_ref = ry.BSpline()
         self.resetSplineRef(0.0)
+
+        print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} and {len(self.freeobjs)} free objects (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})")
 
     def __del__(self):
         if hasattr(self, "viewer") and self.viewer is not None:

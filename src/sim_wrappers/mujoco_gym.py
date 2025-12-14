@@ -22,22 +22,26 @@ class MujocoGym(gym.Env):
 
         self.tau_step = tau_step
         self.goal_map = goal_map
-        self.goal_eps = 1e-3
+        self.goal_eps = 2e-2  #WATCH
         self.cost_const = 0.5
         self.time_limit = time_limit
+        self._max_episode_steps = time_limit/self.tau_step
 
         # define the observation space (see also observation_fct())
-        observation_dim = self.sim.qpos_dim + self.sim.qvel_dim
+        observation_dim = self.observation_fct(x0).size
+        self.goal_dim = 0
         if goal_map is not None:
             self.goal_dim = self.goal_map(self.observation_fct(x0)).size
             observation_dim += self.goal_dim
         self.observation_space = gym.spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
 
         # define the action space
-        action_min_max = 1.
+        self.action_scale = .1  #WATCH
         num_ctrl_pts = 1
         action_dim = num_ctrl_pts*self.sim.ctrl_dim
-        self.action_space = gym.spaces.Box(-action_min_max, +action_min_max, shape=(action_dim,), dtype=np.float32)
+        self.action_space = gym.spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
+
+        print(f"-- initialized MjGym with observation dim {observation_dim} (qdim:{self.sim.qpos_dim}+qvel:{self.sim.qvel_dim}+goal:{self.goal_dim}), action dim {action_dim}, tau step {self.tau_step}, and time limit {self.time_limit}")
 
     def __del__(self):
         del self.sim
@@ -79,23 +83,29 @@ class MujocoGym(gym.Env):
         return observation, info
 
     def step(self, action):
-        ctrl_ref = action.reshape(1, self.sim.ctrl_dim).copy()
-        ctrl_ref += self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # NEW! relativ        
-        self.sim.setSplineRef(ctrl_ref, np.array([2.*self.tau_step]), append=False)
-
-        # reward and truncation depends on x_now, not x_next!!
+        # reward and termination depends on x_now, not x_next!!
         x_now = self.sim.getState()
         obs_now = self.observation_fct(x_now)
         reward = self.reward_fct(obs_now)
         terminated = self.is_goal(obs_now)
+        # if terminated: # and self.sim.view_speed==1.:
+        #     self.sim.C.view(False, f'termination at time {x_now.time}')
 
+        # set action
+        ctrl_ref = self.action_scale * action.reshape(1, self.sim.ctrl_dim).copy()
+        # ctrl_ref += self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # NEW! relativ        
+        ctrl_ref += x_now.qpos[: self.sim.ctrl_dim] # WATCH - relative to current position
+        self.sim.setSplineRef(ctrl_ref, np.array([2.*self.tau_step]), append=False)
+
+        # step
         self.sim.step(tau_step=self.tau_step)
   
+        # get obs and truncation
         x_next = self.sim.getState()
         assert x_next.time == self.sim.ctrl_time, "why not?"
-
         obs_next = self.observation_fct(x_next)
         truncated = (self.sim.ctrl_time >= self.time_limit) # terminated and truncated difference is super important
+
         info = {"no": "additional info"}
         return obs_next, reward, terminated, truncated, info
     
@@ -105,7 +115,7 @@ class MujocoGym(gym.Env):
         return self.goal_map(obs)
     
     def observation_fct(self, x: MjSimState):
-        obs = np.concatenate((x.qpos, x.qvel))
+        obs = np.concatenate((x.qpos[:-4], self.tau_step*x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
         if self.has_wrapper_attr('goal'):
             obs = np.concatenate((obs, self.goal))
         return obs
