@@ -69,7 +69,7 @@ class MjSim:
 
         self.pushConfigToSim()
         self.spline_ref = ry.BSpline()
-        self.resetSplineRef(0.0)
+        self.resetSplineRef(ctrl_time=0.)
 
         print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} and {len(self.freeobjs)} free objects (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})")
 
@@ -149,7 +149,7 @@ class MjSim:
         self.data.time = state.time
         self.data.qpos[:] = state.qpos
         self.data.qvel[:] = state.qvel
-        self.data.actuator_force[:] = state.act
+        self.data.actuator_force[:] = 0. #state.act #WATCH!
         mujoco.mj_forward(self.model, self.data)
         self.ctrl_time = state.time
         if self.use_mj_viewer:
@@ -161,10 +161,14 @@ class MjSim:
         assert x.size==1+nq+nv+self.ctrl_dim, "wrong size"
         return MjSimState(x[0], x[1:1+nq], x[1+nq:1+nq+nv], x[1+nq+nv:])
 
-    def resetSplineRef(self, ctrl_time: float = 0.) -> None:
+    def resetSplineRef(self, ctrl_time: float = 0., const_ref=None) -> None:
         """[core] reset the spline; ctrl_time gives the *absolute* time (relating to mujoco's time state) of the spline knots"""
         self.spline_ref = ry.BSpline()
-        ref = self.data.qpos[: self.ctrl_dim]
+        if const_ref is None:
+            ref = self.data.qpos[: self.ctrl_dim]
+        else:
+            assert const_ref.size==self.ctrl_dim
+            ref = const_ref
         self.spline_ref.set(2, ref.reshape(1, -1), [ctrl_time])
         self.ctrl_time = ctrl_time
 

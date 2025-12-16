@@ -40,7 +40,7 @@ class GymWrapper(GymEnv):
         options: dict[str, Any] | None = None,
     ) -> tuple[MjSimState, dict[str, Any]]:
         super().reset(seed=seed)
-        self.sim.resetSplineRef(0.)
+        self.sim.resetSplineRef(ctrl_time=0.)
         self.sim.setState(self.init_state)
         return self.sim.getState(), {}
 

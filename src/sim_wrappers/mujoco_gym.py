@@ -22,7 +22,7 @@ class MujocoGym(gym.Env):
 
         self.tau_step = tau_step
         self.goal_map = goal_map
-        self.goal_eps = 2e-2  #WATCH
+        self.goal_eps = 1e-2  #WATCH
         self.cost_const = 0.5
         self.time_limit = time_limit
         self._max_episode_steps = time_limit/self.tau_step
@@ -66,9 +66,8 @@ class MujocoGym(gym.Env):
             # ry.rnd_seed(seed)
 
         i = np.random.randint(0, self.starts.shape[0])
-        t = np.random.randint(0, self.starts.shape[1])
-        self.goal = self.goals[i,t]
-        x0 = self.sim.to_state(self.starts[i,t])
+        self.goal = self.goals[i]
+        x0 = self.sim.to_state(self.starts[i])
         x0.time = 0.
         self.sim.setState(x0)
         self.sim.resetSplineRef(ctrl_time=0.)
@@ -96,6 +95,7 @@ class MujocoGym(gym.Env):
         # ctrl_ref += self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # NEW! relativ        
         ctrl_ref += x_now.qpos[: self.sim.ctrl_dim] # WATCH - relative to current position
         self.sim.setSplineRef(ctrl_ref, np.array([2.*self.tau_step]), append=False)
+        # self.sim.resetSplineRef(const_ref=ctrl_ref, ctrl_time=self.sim.ctrl_time) # this would be the command to set a constant ref -- but not good for larget tau_step
 
         # step
         self.sim.step(tau_step=self.tau_step)
@@ -116,6 +116,7 @@ class MujocoGym(gym.Env):
     
     def observation_fct(self, x: MjSimState):
         obs = np.concatenate((x.qpos[:-4], self.tau_step*x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
+        # obs = np.concatenate((obs, .01 * x.act))
         if self.has_wrapper_attr('goal'):
             obs = np.concatenate((obs, self.goal))
         return obs
@@ -135,7 +136,7 @@ class MujocoGym(gym.Env):
         # phi = z - self.feature_target
         # return -np.sum(np.square(phi))
         
-    def rollout(self, pi, return_data=False, verbose=1):
+    def rollout(self, pi, return_data=False, absolute_actions=False, verbose=1):
         '''helper to play and view a policy'''
         obs, info = self.reset()
 
@@ -151,24 +152,27 @@ class MujocoGym(gym.Env):
         t = 0
         R = 0
         while True:
-            state = self.sim.getState().as_vector()
+            state = self.sim.getState()
             action = pi(obs, t)
+            if absolute_actions: # pi returns absolute actions, need to convert back before executing
+                action = action - state.qpos[:self.sim.ctrl_dim]
+                action /= self.action_scale
             self.sim.ctrl_costs=0.
             next_obs, reward, terminated, truncated, info = self.step(action)
             if return_data:
-                data['state'].append(state)
+                data['state'].append(state.as_vector())
                 data['obs'].append(obs)
                 data['action'].append(action)
                 data['ctrl_cost'].append(self.sim.ctrl_costs)
                 data['next_obs'].append(next_obs)
                 data['reward'].append(np.array([reward]))
-                data['terminal'].append(np.array([(1. if terminated or truncated else 0.)]))
+                data['terminal'].append(np.array([(1 if terminated or truncated else 0)], dtype=np.int16))
             obs = next_obs
             R += reward
             t += 1
             if verbose>1:
                 print("reward: ", reward)
-            if terminated or truncated:
+            if truncated: #terminated or 
                 break
 
         if verbose>0:
