@@ -149,7 +149,7 @@ class MjSim:
         self.data.time = state.time
         self.data.qpos[:] = state.qpos
         self.data.qvel[:] = state.qvel
-        self.data.actuator_force[:] = 0. #state.act #WATCH!
+        self.data.actuator_force[:] = state.act #WATCH!
         mujoco.mj_forward(self.model, self.data)
         self.ctrl_time = state.time
         if self.use_mj_viewer:

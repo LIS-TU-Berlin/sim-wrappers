@@ -23,7 +23,7 @@ class MujocoGym(gym.Env):
         self.tau_step = tau_step
         self.goal_map = goal_map
         self.goal_eps = 1e-2  #WATCH
-        self.cost_const = 0.5
+        self.cost_const = 0.0
         self.time_limit = time_limit
         self._max_episode_steps = time_limit/self.tau_step
 
@@ -71,6 +71,7 @@ class MujocoGym(gym.Env):
         x0.time = 0.
         self.sim.setState(x0)
         self.sim.resetSplineRef(ctrl_time=0.)
+        self.sim.data.actuator_force[:] = 0.
 
         # if self.random_reset:
         #     # resetting the box position to a random initial position -- makes it MUCH harder
@@ -109,15 +110,10 @@ class MujocoGym(gym.Env):
         info = {"no": "additional info"}
         return obs_next, reward, terminated, truncated, info
     
-    def goal_from_state_vec(self, state):
-        x = self.sim.to_state(state)
-        obs = self.observation_fct(x)
-        return self.goal_map(obs)
-    
-    def observation_fct(self, x: MjSimState):
+    def observation_fct(self, x: MjSimState, without_goal=False):
         obs = np.concatenate((x.qpos[:-4], self.tau_step*x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
-        # obs = np.concatenate((obs, .01 * x.act))
-        if self.has_wrapper_attr('goal'):
+        obs = np.concatenate((obs, .01 * x.act))
+        if self.has_wrapper_attr('goal') and not without_goal:
             obs = np.concatenate((obs, self.goal))
         return obs
 
