@@ -11,9 +11,10 @@ import robotic as ry
 class MujocoGym(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
     render_mode = 'human'
+    verbose = 0
 
     def __init__(self, sim: MjSim, tau_step: float = 0.05, time_limit=1.,
-                 goal_map = None):
+                 goal_feat_map = None):
         self.sim = sim
         x0 = self.sim.getState()
         if x0.time > 0.:
@@ -21,8 +22,8 @@ class MujocoGym(gym.Env):
             x0.time = 0.
 
         self.tau_step = tau_step
-        self.goal_map = goal_map
-        self.goal_eps = 1e-2  #WATCH
+        self.goal_feat_map = goal_feat_map
+        self.goal_feat_eps = 1e-2  #WATCH
         self.cost_const = 0.0
         self.time_limit = time_limit
         self._max_episode_steps = time_limit/self.tau_step
@@ -30,8 +31,8 @@ class MujocoGym(gym.Env):
         # define the observation space (see also observation_fct())
         observation_dim = self.observation_fct(x0).size
         self.goal_dim = 0
-        if goal_map is not None:
-            self.goal_dim = self.goal_map(self.observation_fct(x0)).size
+        if goal_feat_map is not None:
+            self.goal_dim = self.goal_feat_map(self.observation_fct(x0)).size
             observation_dim += self.goal_dim
         self.observation_space = gym.spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
 
@@ -48,7 +49,7 @@ class MujocoGym(gym.Env):
 
     def set_start_goal(self, start: MjSimState, goal: MjSimState):
         self.starts = start.as_vector().reshape(1,-1)
-        self.goals = self.goal_map(self.observation_fct(goal)).reshape(1,-1)
+        self.goals = goal.as_vector().reshape(1,-1)
 
     def set_starts_goals(self, starts: np.array, goals: np.array):
         assert starts.shape[0]==goals.shape[0]
@@ -66,7 +67,12 @@ class MujocoGym(gym.Env):
             # ry.rnd_seed(seed)
 
         i = np.random.randint(0, self.starts.shape[0])
-        self.goal = self.goals[i]
+        g0 = self.sim.to_state(self.goals[i])
+        self.goal_feat = self.goal_feat_map(self.observation_fct(g0, without_goal=True))
+        if self.verbose>2:
+            self.sim.setState(g0)
+            self.sim.C.view(True, f'GYM - reset goal state (feature: {self.goal_feat})')
+
         x0 = self.sim.to_state(self.starts[i])
         x0.time = 0.
         self.sim.setState(x0)
@@ -77,6 +83,8 @@ class MujocoGym(gym.Env):
         #     # resetting the box position to a random initial position -- makes it MUCH harder
         #     self.box_pos0 = np.array([.0,-.1,.7]) + .7 * np.random.rand(3)
         #     self.box_pos0[2]=.7
+        if self.verbose>2:
+            self.sim.C.view(True, 'GYM - reset start state')
 
         observation = self.observation_fct(x0)
         info = {"no": "additional info"}
@@ -107,20 +115,26 @@ class MujocoGym(gym.Env):
         obs_next = self.observation_fct(x_next)
         truncated = (self.sim.ctrl_time >= self.time_limit) # terminated and truncated difference is super important
 
+        if self.verbose>2:
+            if terminated:
+                self.sim.C.view(True, f'GYM - terminated (reward: {reward})')
+            elif truncated:
+                self.sim.C.view(True, f'GYM - truncated (reward: {reward})')
+
         info = {"no": "additional info"}
         return obs_next, reward, terminated, truncated, info
     
     def observation_fct(self, x: MjSimState, without_goal=False):
         obs = np.concatenate((x.qpos[:-4], self.tau_step*x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
         obs = np.concatenate((obs, .01 * x.act))
-        if self.has_wrapper_attr('goal') and not without_goal:
-            obs = np.concatenate((obs, self.goal))
+        if self.has_wrapper_attr('goal_feat') and not without_goal:
+            obs = np.concatenate((obs, self.goal_feat))
         return obs
 
     def is_goal(self, obs):
-        err = np.linalg.norm(self.goal_map(obs)-self.goal)
+        err = np.linalg.norm(self.goal_feat_map(obs)-self.goal_feat)
         # print('err', err)
-        if err <= self.goal_eps:
+        if err <= self.goal_feat_eps:
             return True
         return False
 
