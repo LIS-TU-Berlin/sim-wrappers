@@ -26,8 +26,10 @@ class MjSim:
     ctrl_time: float  # same as mj's state.time
     mj_steps = 0
     view_speed = -1.
-    save_steps = -1
-    save_qpos = []
+    save_qpos = -1
+    saved_qpos = []
+    save_images = False
+    saved_images = []
     ctrl_costs = 0.
 
     def __init__(
@@ -100,7 +102,7 @@ class MjSim:
             f.setPose(self.data.qpos[self.q_dim + 7 * i : self.q_dim + 7 * (i + 1)])
 
     def multi_steps(self, steps: int) -> None:
-        view_steps = math.ceil(0.03 / self.tau_sim / self.view_speed)
+        view_steps = math.ceil(0.02 / self.tau_sim / self.view_speed)
         for k in range(steps):
             ## [older version had option for an LQR here -> if needed, redo this with option to set K matrix relative to spline ref]
             self.data.ctrl[:] = self.spline_ref.eval3(self.ctrl_time)[0]
@@ -111,18 +113,17 @@ class MjSim:
             self.ctrl_costs += np.sum(np.square(self.data.actuator_force))
 
             # storing the path
-            if self.save_steps>0 and (self.mj_steps%self.save_steps==0):
-                self.save_qpos.append(self.data.qpos.copy())
+            if self.save_qpos>0 and (self.mj_steps%self.save_qpos==0):
+                self.saved_qpos.append(self.data.qpos.copy())
 
             # Visualization
-            if self.view_speed > 0.0 and ((k + 1) % view_steps == 0 or k == steps - 1):
+            if self.view_speed > 0.0 and (self.mj_steps%view_steps==0):
                 if self.use_mj_viewer:
                     self.viewer.sync()
                 self.pullConfigFromSim()
-                self.C.view(
-                    False,
-                    f"mujoco sim time: {self.data.time:6.3f}, ctrl time: {self.ctrl_time:6.3f}",
-                )
+                self.C.view(False, f"sim t:{self.ctrl_time:6.3f}")
+                if self.save_images:
+                    self.saved_images.append(self.C.get_viewer().getRgb())
                 time.sleep(self.view_speed * view_steps * self.tau_sim)
         self.pullConfigFromSim()
 

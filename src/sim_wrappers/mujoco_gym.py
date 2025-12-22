@@ -42,7 +42,7 @@ class MujocoGym(gym.Env):
         action_dim = num_ctrl_pts*self.sim.ctrl_dim
         self.action_space = gym.spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
 
-        print(f"-- initialized MjGym with observation dim {observation_dim} (qdim:{self.sim.qpos_dim}+qvel:{self.sim.qvel_dim}+goal:{self.goal_dim}), action dim {action_dim}, tau step {self.tau_step}, and time limit {self.time_limit}")
+        print(f"-- initialized MjGym with observation dim {observation_dim} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{self.goal_dim}), action dim {action_dim}, tau step {self.tau_step}, and time limit {self.time_limit}")
 
     def __del__(self):
         del self.sim
@@ -71,7 +71,8 @@ class MujocoGym(gym.Env):
         self.goal_feat = self.goal_feat_map(self.observation_fct(g0, without_goal=True))
         if self.verbose>2:
             self.sim.setState(g0)
-            self.sim.C.view(True, f'GYM - reset goal state (feature: {self.goal_feat})')
+            self.sim.C.view(self.verbose>3, f'gym GOAL - time limit:{self.time_limit:6.3f}, feature: {self.goal_feat}')
+            self.goal_image = self.sim.C.get_viewer().getRgb().copy()
 
         x0 = self.sim.to_state(self.starts[i])
         x0.time = 0.
@@ -84,7 +85,7 @@ class MujocoGym(gym.Env):
         #     self.box_pos0 = np.array([.0,-.1,.7]) + .7 * np.random.rand(3)
         #     self.box_pos0[2]=.7
         if self.verbose>2:
-            self.sim.C.view(True, 'GYM - reset start state')
+            self.sim.C.view(self.verbose>3, f'gym START - t:{self.sim.ctrl_time:6.3f}')
 
         observation = self.observation_fct(x0)
         info = {"no": "additional info"}
@@ -117,9 +118,11 @@ class MujocoGym(gym.Env):
 
         if self.verbose>2:
             if terminated:
-                self.sim.C.view(True, f'GYM - terminated (reward: {reward})')
+                self.sim.C.view(self.verbose>3, f'gym END - terminated, t:{self.sim.ctrl_time:6.3f}, reward: {reward}')
             elif truncated:
-                self.sim.C.view(True, f'GYM - truncated (reward: {reward})')
+                self.sim.C.view(self.verbose>3, f'gym END - truncated, t:{self.sim.ctrl_time:6.3f}, reward: {reward}')
+            # else:
+            #     self.sim.C.view(False, f'GYM t:{self.sim.ctrl_time:6.3f} (reward: {reward})')
 
         info = {"no": "additional info"}
         return obs_next, reward, terminated, truncated, info
@@ -146,15 +149,9 @@ class MujocoGym(gym.Env):
         # phi = z - self.feature_target
         # return -np.sum(np.square(phi))
         
-    def rollout(self, pi, return_data=False, absolute_actions=False, verbose=1):
+    def rollout(self, pi, return_data=False, absolute_actions=False):
         '''helper to play and view a policy'''
         obs, info = self.reset()
-
-        if verbose>0:
-            self.sim.C.view(True, 'START')
-            self.sim.view_speed=1.
-        else:
-            self.sim.view_speed=-1.
 
         if return_data:
             data = {'state': [], 'obs': [], 'action': [], 'ctrl_cost': [], 'next_obs': [], 'reward': [], 'terminal': []}
@@ -180,14 +177,13 @@ class MujocoGym(gym.Env):
             obs = next_obs
             R += reward
             t += 1
-            if verbose>1:
+            if self.verbose>1:
                 print("reward: ", reward)
             if truncated: #terminated or 
                 break
 
-        if verbose>0:
+        if self.verbose>0:
             print('total (non-discounted) return:', R)
-            self.sim.C.view(True, 'END')
         
         if return_data:
             for key, value in data.items():
