@@ -3,7 +3,7 @@
 from .mujoco_sim import *
 import gymnasium as gym
 import numpy as np
-import time
+import time, math
 import robotic as ry
 
 ###############################################################################
@@ -37,7 +37,7 @@ class MujocoGym(gym.Env):
         self.observation_space = gym.spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
 
         # define the action space
-        self.action_scale = .1  #WATCH
+        self.action_scale = 0.5*math.sqrt(tau_step)  #WATCH
         num_ctrl_pts = 1
         action_dim = num_ctrl_pts*self.sim.ctrl_dim
         self.action_space = gym.spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
