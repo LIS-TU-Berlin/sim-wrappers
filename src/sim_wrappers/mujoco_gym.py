@@ -94,9 +94,9 @@ class MujocoGym(gym.Env):
     def step(self, action):
         # reward and termination depends on x_now, not x_next!!
         x_now = self.sim.getState()
-        obs_now = self.observation_fct(x_now)
-        reward = self.reward_fct(obs_now)
-        terminated = self.is_goal(obs_now)
+        # obs_now = self.observation_fct(x_now)
+        # reward = self.reward_fct(obs_now)
+        # terminated = self.is_goal(obs_now)
         # if terminated: # and self.sim.view_speed==1.:
         #     self.sim.C.view(False, f'termination at time {x_now.time}')
 
@@ -114,6 +114,8 @@ class MujocoGym(gym.Env):
         x_next = self.sim.getState()
         assert x_next.time == self.sim.ctrl_time, "why not?"
         obs_next = self.observation_fct(x_next)
+        reward = self.reward_fct(obs_next)  ##WATCH reward based on next state?
+        terminated = self.is_goal(obs_next)
         truncated = (self.sim.ctrl_time >= self.time_limit) # terminated and truncated difference is super important
 
         if self.verbose>2:
@@ -144,7 +146,9 @@ class MujocoGym(gym.Env):
     def reward_fct(self, obs):
         if self.is_goal(obs):
             return 1.
-        return -self.tau_step * self.cost_const
+        if self.cost_const>0.:
+            return -self.tau_step * self.cost_const
+        return 0.
         # z = self.feature_map(obs)
         # phi = z - self.feature_target
         # return -np.sum(np.square(phi))
