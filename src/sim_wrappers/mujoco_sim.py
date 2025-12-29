@@ -22,7 +22,7 @@ class MjSimState:
         return np.concat((np.array([self.time]), self.qpos, self.qvel, self.act))
 
 
-class MjSim:
+class MujocoSim:
     ctrl_time: float  # same as mj's state.time
     mj_steps = 0
     view_speed = -1.
@@ -49,8 +49,8 @@ class MjSim:
         """
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
-        self.model.opt.timestep = tau_sim
         self.tau_sim = tau_sim
+        self.model.opt.timestep = self.tau_sim
         self.use_mj_viewer = use_mj_viewer
         self.xml_file = xml_path
 
@@ -131,9 +131,7 @@ class MjSim:
         """[core] step the physics engine"""
         tau_step = self.tau_step if tau_step is None else tau_step
         steps = round(tau_step / self.tau_sim)
-        assert math.isclose(
-            tau_step, steps * self.tau_sim
-        ), "tau_step needs to be a multiple of tau_sim"
+        assert math.isclose(tau_step, steps * self.tau_sim), "tau_step needs to be a multiple of tau_sim"
         self.multi_steps(steps)
 
     def getState(self) -> MjSimState:
@@ -150,7 +148,7 @@ class MjSim:
         self.data.time = state.time
         self.data.qpos[:] = state.qpos
         self.data.qvel[:] = state.qvel
-        self.data.actuator_force[:] = state.act #WATCH!
+        self.data.actuator_force[:] = state.act
         mujoco.mj_forward(self.model, self.data)
         self.ctrl_time = state.time
         if self.use_mj_viewer:
