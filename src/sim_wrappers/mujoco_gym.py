@@ -35,11 +35,9 @@ class MujocoGym(gym.Env):
         self._max_episode_steps = self.cfg.time_limit/self.cfg.tau_step
 
         # define the observation space (see also observation_fct())
-        observation_dim = self.observation_fct(x0).size
-        self.goal_dim = 0
-        if goal_feat_map is not None:
-            self.goal_dim = self.goal_feat_map(self.observation_fct(x0)).size
-            observation_dim += self.goal_dim
+        obs, feat = self.observation_fct(x0, without_goal=True)
+        observation_dim = obs.size
+        observation_dim += feat.size
         self.observation_space = gym.spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
 
         # define the action space
@@ -48,7 +46,7 @@ class MujocoGym(gym.Env):
         action_dim = num_ctrl_pts*self.sim.ctrl_dim
         self.action_space = gym.spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
 
-        print(f"-- initialized MjGym with observation dim {observation_dim} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{self.goal_dim}), action dim {action_dim}, tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
+        print(f"-- initialized MjGym with observation dim {observation_dim} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{feat.size}), action dim {action_dim}, tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
 
     def __del__(self):
         del self.sim
@@ -70,7 +68,7 @@ class MujocoGym(gym.Env):
 
         i = np.random.randint(0, self.starts.shape[0])
         g0 = self.sim.to_state(self.goals[i])
-        self.goal_feat = self.goal_feat_map(self.observation_fct(g0, without_goal=True))
+        _, self.goal_feat = self.observation_fct(g0, without_goal=True)
         if self.verbose>2:
             self.sim.setState(g0)
             self.sim.C.view(self.verbose>3, f'gym GOAL - time limit:{self.cfg.time_limit:6.3f}, feature: {self.goal_feat}')
@@ -89,7 +87,7 @@ class MujocoGym(gym.Env):
         if self.verbose>2:
             self.sim.C.view(self.verbose>3, f'gym START - t:{self.sim.ctrl_time:6.3f}')
 
-        observation = self.observation_fct(x0)
+        observation, feat = self.observation_fct(x0)
         info = {"no": "additional info"}
         return observation, info
 
@@ -97,9 +95,9 @@ class MujocoGym(gym.Env):
         # reward and termination depends on x_now, not x_next!!
         x_now = self.sim.getState()
         if not self.cfg.reward_next_state:
-            obs_now = self.observation_fct(x_now)
-            reward = self.reward_fct(obs_now)
-            terminated = self.is_goal(obs_now)
+            obs_now, feat_now = self.observation_fct(x_now)
+            reward = self.reward_fct(obs_now, feat_now)
+            terminated = self.is_goal(obs_now, feat_now)
             # if terminated: # and self.sim.view_speed==1.:
             #     self.sim.C.view(False, f'termination at time {x_now.time}')
 
@@ -116,10 +114,10 @@ class MujocoGym(gym.Env):
         # get obs and truncation
         x_next = self.sim.getState()
         assert x_next.time == self.sim.ctrl_time, "why not?"
-        obs_next = self.observation_fct(x_next)
+        obs_next, feat_next = self.observation_fct(x_next)
         if self.cfg.reward_next_state:
-            reward = self.reward_fct(obs_next)
-            terminated = self.is_goal(obs_next)
+            reward = self.reward_fct(obs_next, feat_next)
+            terminated = self.is_goal(obs_next, feat_next)
         truncated = (self.sim.ctrl_time >= self.cfg.time_limit) # terminated and truncated difference is super important
 
         if self.verbose>2:
@@ -136,19 +134,20 @@ class MujocoGym(gym.Env):
     def observation_fct(self, x: MjSimState, without_goal=False):
         obs = np.concatenate((x.qpos[:-4], self.cfg.tau_step*x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
         obs = np.concatenate((obs, .01 * x.act))
-        if self.has_wrapper_attr('goal_feat') and not without_goal:
-            obs = np.concatenate((obs, self.goal_feat))
-        return obs
+        feat = self.goal_feat_map(obs)
+        if not without_goal and self.has_wrapper_attr('goal_feat'):
+            obs = np.concatenate((obs, self.goal_feat - feat)) #WATCH! relative goal!!
+        return obs, feat
 
-    def is_goal(self, obs):
-        err = np.linalg.norm(self.goal_feat_map(obs)-self.goal_feat)
+    def is_goal(self, obs, feat):
+        err = np.linalg.norm(feat-self.goal_feat)
         # print('err', err)
         if err <= self.cfg.goal_feat_eps:
             return True
         return False
 
-    def reward_fct(self, obs):
-        if self.is_goal(obs):
+    def reward_fct(self, obs, feat):
+        if self.is_goal(obs, feat):
             return 1.
         if self.cfg.cost_const>0.:
             return -self.cfg.tau_step * self.cfg.cost_const
