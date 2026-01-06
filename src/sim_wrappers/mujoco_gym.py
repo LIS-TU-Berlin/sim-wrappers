@@ -88,7 +88,7 @@ class MujocoGym(gym.Env):
             self.sim.C.view(self.verbose>3, f'gym START - t:{self.sim.ctrl_time:6.3f}')
 
         observation, feat = self.observation_fct(x0)
-        info = {"no": "additional info"}
+        info = { 'start_goal_id': i, 'start_state_feat': feat}
         return observation, info
 
     def step(self, action):
@@ -128,7 +128,7 @@ class MujocoGym(gym.Env):
             # else:
             #     self.sim.C.view(False, f'GYM t:{self.sim.ctrl_time:6.3f} (reward: {reward})')
 
-        info = {"no": "additional info"}
+        info = { 'feat_next': feat_next }
         return obs_next, reward, terminated, truncated, info
     
     def observation_fct(self, x: MjSimState, without_goal=False):

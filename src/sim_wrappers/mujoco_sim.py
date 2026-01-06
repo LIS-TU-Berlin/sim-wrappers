@@ -56,6 +56,14 @@ class MujocoSim:
 
         if use_mj_viewer:
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
+            cam_pose = C.get_viewer().getCamera_pose()
+            q = ry.Quaternion()
+            q.set(cam_pose[3:])
+            rpy = q.getRollPitchYaw()
+            self.viewer.cam.azimuth = -90.+rpy[1]*180./math.pi
+            self.viewer.cam.elevation = 90.-rpy[0]*180./math.pi
+            self.viewer.cam.distance = 3.
+            self.viewer.cam.lookat = [0., 0., .5]
         else:
             self.viewer = None
 
