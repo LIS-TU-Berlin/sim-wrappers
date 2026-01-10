@@ -1,10 +1,10 @@
 # initial version from e05-RobotGym.py (robot learning course)
 
-from .mujoco_sim import *
+from .mujoco_sim import MujocoSim, MjSimState
 import gymnasium as gym
 import numpy as np
-import time, math
-import robotic as ry
+from dataclasses import dataclass
+import math
 
 ###############################################################################
 
@@ -16,6 +16,7 @@ class MujocoGymConfig:
     cost_const = 0.0
     action_scale_sqrttau = 0.5   #WATCH
     reward_next_state = True # WATCH
+    use_Kd_ctrl = False
 
 
 class MujocoGym(gym.Env):
@@ -43,7 +44,7 @@ class MujocoGym(gym.Env):
         # define the action space
         self.action_scale = self.cfg.action_scale_sqrttau*math.sqrt(self.cfg.tau_step)
         num_ctrl_pts = 1
-        action_dim = num_ctrl_pts*self.sim.ctrl_dim
+        action_dim = num_ctrl_pts*self.sim.ctrl_dim + (1 if self.cfg.use_Kd_ctrl else 0)
         self.action_space = gym.spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
 
         print(f"-- initialized MjGym with observation dim {observation_dim} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{feat.size}), action dim {action_dim}, tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
@@ -92,6 +93,7 @@ class MujocoGym(gym.Env):
         return observation, info
 
     def step(self, action):
+        assert action.ndim==1, 'need a single vector action'
         # reward and termination depends on x_now, not x_next!!
         x_now = self.sim.getState()
         if not self.cfg.reward_next_state:
@@ -102,7 +104,12 @@ class MujocoGym(gym.Env):
             #     self.sim.C.view(False, f'termination at time {x_now.time}')
 
         # set action
-        ctrl_ref = self.action_scale * action.reshape(1, self.sim.ctrl_dim).copy()
+        if self.cfg.use_Kd_ctrl:
+            assert action.size==self.sim.ctrl_dim+1
+            self.sim.Kd = action[-1]
+            ctrl_ref = self.action_scale * action[:-1].reshape(1, self.sim.ctrl_dim).copy()
+        else:
+            ctrl_ref = self.action_scale * action.reshape(1, self.sim.ctrl_dim).copy()
         # ctrl_ref += self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # NEW! relativ        
         ctrl_ref += x_now.qpos[: self.sim.ctrl_dim] # WATCH - relative to current position
         self.sim.setSplineRef(ctrl_ref, np.array([2.*self.cfg.tau_step]), append=False)
