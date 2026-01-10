@@ -132,7 +132,11 @@ class MujocoGym(gym.Env):
         return obs_next, reward, terminated, truncated, info
     
     def observation_fct(self, x: MjSimState, without_goal=False):
-        obs = np.concatenate((x.qpos[:-4], self.cfg.tau_step*x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
+        qall = x.qpos[:-4]
+        assert qall.size==6
+        obj_pos = qall[3:]
+        eff_pos = qall[:3]
+        obs = np.concatenate((eff_pos-obj_pos, obj_pos, .02 * x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
         obs = np.concatenate((obs, .01 * x.act))
         feat = self.goal_feat_map(obs)
         if not without_goal and self.has_wrapper_attr('goal_feat'):
