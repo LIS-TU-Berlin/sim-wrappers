@@ -15,6 +15,7 @@ class MujocoGymConfig:
     goal_feat_eps = 1e-2   #WATCH
     cost_const = 0.0
     action_scale_sqrttau = 0.5   #WATCH
+    obs_vel_scale = .05
     reward_next_state = True # WATCH
     use_Kd_ctrl = False
 
@@ -106,7 +107,7 @@ class MujocoGym(gym.Env):
         # set action
         if self.cfg.use_Kd_ctrl:
             assert action.size==self.sim.ctrl_dim+1
-            self.sim.Kd = action[-1]
+            self.sim.Kd = 0.01*action[-1]
             ctrl_ref = self.action_scale * action[:-1].reshape(1, self.sim.ctrl_dim).copy()
         else:
             ctrl_ref = self.action_scale * action.reshape(1, self.sim.ctrl_dim).copy()
@@ -139,11 +140,7 @@ class MujocoGym(gym.Env):
         return obs_next, reward, terminated, truncated, info
     
     def observation_fct(self, x: MjSimState, without_goal=False):
-        qall = x.qpos[:-4]
-        assert qall.size==6
-        obj_pos = qall[3:]
-        eff_pos = qall[:3]
-        obs = np.concatenate((eff_pos-obj_pos, obj_pos, .02 * x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
+        obs = np.concatenate((x.qpos[:-4], obj_pos, self.cfg.obs_vel_scale * x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
         obs = np.concatenate((obs, .01 * x.act))
         feat = self.goal_feat_map(obs)
         if not without_goal and self.has_wrapper_attr('goal_feat'):
