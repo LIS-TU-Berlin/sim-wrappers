@@ -40,6 +40,7 @@ class MujocoGym(gym.Env):
         obs, feat = self.observation_fct(x0, without_goal=True)
         observation_dim = obs.size
         observation_dim += feat.size
+        self.feat_shape = feat.shape  # Needed for MujocoGoalGym
         self.observation_space = gym.spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
 
         # define the action space
