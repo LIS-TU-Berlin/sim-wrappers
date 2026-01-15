@@ -1,7 +1,7 @@
 # initial version from e05-RobotGym.py (robot learning course)
 
 from .mujoco_sim import MujocoSim, MjSimState
-import gymnasium as gym
+from gymnasium import Env, spaces
 import numpy as np
 from dataclasses import dataclass
 import math
@@ -20,7 +20,7 @@ class MujocoGymConfig:
     use_Kd_ctrl = False
 
 
-class MujocoGym(gym.Env):
+class MujocoGym(Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
     render_mode = 'human'
     verbose = 0
@@ -40,13 +40,13 @@ class MujocoGym(gym.Env):
         obs, feat = self.observation_fct(x0, without_goal=True)
         observation_dim = obs.size
         observation_dim += feat.size
-        self.observation_space = gym.spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
+        self.observation_space = spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
 
         # define the action space
         self.action_scale = self.cfg.action_scale_sqrttau*math.sqrt(self.cfg.tau_step)
         num_ctrl_pts = 1
         action_dim = num_ctrl_pts*self.sim.ctrl_dim + (1 if self.cfg.use_Kd_ctrl else 0)
-        self.action_space = gym.spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
+        self.action_space = spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
 
         print(f"-- initialized MjGym with observation dim {observation_dim} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{feat.size}), action dim {action_dim}, tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
 
@@ -140,7 +140,7 @@ class MujocoGym(gym.Env):
         return obs_next, reward, terminated, truncated, info
     
     def observation_fct(self, x: MjSimState, without_goal=False):
-        obs = np.concatenate((x.qpos[:-4], obj_pos, self.cfg.obs_vel_scale * x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
+        obs = np.concatenate((x.qpos[:-4], self.cfg.obs_vel_scale * x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
         obs = np.concatenate((obs, .01 * x.act))
         feat = self.goal_feat_map(obs)
         if not without_goal and self.has_wrapper_attr('goal_feat'):

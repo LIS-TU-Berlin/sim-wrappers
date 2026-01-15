@@ -111,15 +111,18 @@ class MujocoSim:
             f.setPose(self.data.qpos[self.q_dim + 7 * i : self.q_dim + 7 * (i + 1)])
 
     def multi_sim_steps(self, steps: int) -> None:
-        view_steps = math.ceil(0.02 / self.tau_sim / self.view_speed)
+        view_steps = math.ceil(0.02 / self.tau_sim * self.view_speed)
         for k in range(steps):
             ctrl_ref = self.spline_ref.eval3(self.ctrl_time)[0]
             if self.Kd is not None:
                 assert self.data.qvel.size == 9
                 assert ctrl_ref.size == 3
-                effvel = self.data.qvel[:3]
-                objvel = self.data.qvel[3:6]
-                ctrl_ref += self.Kd * (effvel-objvel)
+                effvel = self.data.qvel[:2]
+                objvel = self.data.qvel[3:5]  
+                objpos = self.data.qpos[3:5] - self.data.qpos[:2]
+                effpos = self.data.qpos[:2] - ctrl_ref[:2]
+                for i in range(2):
+                    ctrl_ref[i] += np.dot(self.Kd, np.array([objpos[i], objvel[i], effpos[i], effvel[i]])) # * (effvel-objvel)
             self.data.ctrl[:] = ctrl_ref
 
             mujoco.mj_step(self.model, self.data)
@@ -139,15 +142,14 @@ class MujocoSim:
                 self.C.view(False, f"sim t:{self.ctrl_time:6.3f}")
                 if self.save_images:
                     self.saved_images.append(self.C.get_viewer().getRgb())
-                time.sleep(self.view_speed * view_steps * self.tau_sim)
+                time.sleep(view_steps * self.tau_sim / self.view_speed)
         self.pullConfigFromSim()
 
-    def step(self, tau_step: Optional[float] = None) -> None:
+    def step(self, tau_step: float) -> None:
         """[core] step the physics engine for a given time, usually making multiple small (tau_sim) steps"""
-        tau_step = self.tau_step if tau_step is None else tau_step
-        steps = round(tau_step / self.tau_sim)
-        assert math.isclose(tau_step, steps * self.tau_sim), "tau_step needs to be a multiple of tau_sim"
-        self.multi_sim_steps(steps)
+        sim_steps = round(tau_step / self.tau_sim)
+        assert math.isclose(tau_step, sim_steps * self.tau_sim), "tau_step needs to be a multiple of tau_sim"
+        self.multi_sim_steps(sim_steps)
 
     def getState(self) -> MjSimState:
         """[core] get a state struct that allows exact reset"""
