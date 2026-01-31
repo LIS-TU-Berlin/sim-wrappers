@@ -66,14 +66,12 @@ class MujocoGym(Env):
     def reset(self, seed=None, options=None):
         if seed is not None:
             super().reset(seed=int(seed))
-            # np.random.seed(seed)
-            # ry.rnd_seed(seed)
 
         i = np.random.randint(0, self.starts.shape[0])
-        g0 = self.sim.to_state(self.goals[i])
-        _, self.goal_feat = self.observation_fct(g0, without_goal=True)
+        self.goal_state = self.sim.to_state(self.goals[i])
+        _, self.goal_feat = self.observation_fct(self.goal_state, without_goal=True)
         if self.verbose>2:
-            self.sim.setState(g0)
+            self.sim.setState(self.goal_state)
             self.sim.C.view(self.verbose>3, f'gym GOAL - time limit:{self.cfg.time_limit:6.3f}, feature: {self.goal_feat}')
             self.goal_image = self.sim.C.get_viewer().getRgb().copy()
 
@@ -144,7 +142,7 @@ class MujocoGym(Env):
         obs = np.concatenate((x.qpos[:-4], self.cfg.obs_vel_scale * x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
         obs = np.concatenate((obs, .01 * x.act))
         feat = self.goal_feat_map(obs)
-        if not without_goal and self.has_wrapper_attr('goal_feat'):
+        if not without_goal:
             obs = np.concatenate((obs, self.goal_feat - feat)) #WATCH! relative goal!!
         return obs, feat
 

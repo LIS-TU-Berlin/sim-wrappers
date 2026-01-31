@@ -21,6 +21,13 @@ class MjSimState:
     def as_vector(self):
         return np.concat((np.array([self.time]), self.qpos, self.qvel, self.act))
 
+class SecondOrderCtrlRef:
+    def __init__(x0, v0, delta, tau):
+        self.x0 = x0
+        self.v0 = v0
+        self.a  = (delta-tau*v0)/(tau*tau) #at time t=tau, f(t) = x0+delta
+    def eval(self, t):
+        return a*(t*t) + v0*t + x0
 
 class MujocoSim:
     ctrl_time: float  # same as mj's state.time
@@ -79,7 +86,6 @@ class MujocoSim:
         assert self.data.time == 0.
 
         self.pushConfigToSim()
-        self.spline_ref = ry.BSpline()
         self.resetSplineRef(ctrl_time=0.)
 
         print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} and {len(self.freeobjs)} free objects (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})")
@@ -134,12 +140,12 @@ class MujocoSim:
             if self.save_qpos>0 and (self.mj_steps%self.save_qpos==0):
                 self.saved_qpos.append(self.data.qpos.copy())
 
-            # Visualization
+            # visualization, and storing images
             if self.view_speed > 0.0 and (self.mj_steps%view_steps==0):
                 if self.use_mj_viewer:
                     self.viewer.sync()
                 self.pullConfigFromSim()
-                self.C.view(False, f"sim t:{self.ctrl_time:6.3f}")
+                self.C.view(False, f"sim t:{self.ctrl_time:6.3f}", offscreen=self.save_images)
                 if self.save_images:
                     self.saved_images.append(self.C.get_viewer().getRgb())
                 time.sleep(view_steps * self.tau_sim / self.view_speed)
@@ -172,10 +178,10 @@ class MujocoSim:
             self.viewer.sync()
         self.pullConfigFromSim()
 
-    def to_state(self, x: np.array) -> MjSimState:
+    def to_state(self, s: np.array) -> MjSimState:
         nq, nv = self.data.qpos.size, self.data.qvel.size
-        assert x.size==1+nq+nv+self.ctrl_dim, "wrong size"
-        return MjSimState(x[0], x[1:1+nq], x[1+nq:1+nq+nv], x[1+nq+nv:])
+        assert s.size==1+nq+nv+self.ctrl_dim, "wrong size"
+        return MjSimState(s[0], s[1:1+nq], s[1+nq:1+nq+nv], s[1+nq+nv:])
 
     def resetSplineRef(self, ctrl_time: float = 0., const_ref=None) -> None:
         """[core] reset the spline; ctrl_time gives the *absolute* time (relating to mujoco's time state) of the spline knots"""
