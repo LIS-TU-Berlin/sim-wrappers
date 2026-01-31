@@ -22,12 +22,14 @@ class MjSimState:
         return np.concat((np.array([self.time]), self.qpos, self.qvel, self.act))
 
 class SecondOrderCtrlRef:
-    def __init__(x0, v0, delta, tau):
+    def __init__(self, t0, x0, v0, delta, tau):
+        self.t0 = t0
         self.x0 = x0
         self.v0 = v0
         self.a  = (delta-tau*v0)/(tau*tau) #at time t=tau, f(t) = x0+delta
     def eval(self, t):
-        return a*(t*t) + v0*t + x0
+        d = t - self.t0
+        return self.a*(d*d) + self.v0*d + self.x0
 
 class MujocoSim:
     ctrl_time: float  # same as mj's state.time
@@ -119,7 +121,8 @@ class MujocoSim:
     def multi_sim_steps(self, steps: int) -> None:
         view_steps = math.ceil(0.02 / self.tau_sim * self.view_speed)
         for k in range(steps):
-            ctrl_ref = self.spline_ref.eval3(self.ctrl_time)[0]
+            # ctrl_ref = self.spline_ref.eval3(self.ctrl_time)[0]
+            ctrl_ref = self.ctrlRef.eval(self.ctrl_time)
             if self.Kd is not None:
                 assert self.data.qvel.size == 9
                 assert ctrl_ref.size == 3
@@ -185,21 +188,23 @@ class MujocoSim:
 
     def resetSplineRef(self, ctrl_time: float = 0., const_ref=None) -> None:
         """[core] reset the spline; ctrl_time gives the *absolute* time (relating to mujoco's time state) of the spline knots"""
-        self.spline_ref = ry.BSpline()
+        # self.spline_ref = ry.BSpline()
         if const_ref is None:
             ref = self.data.qpos[: self.ctrl_dim]
         else:
             assert const_ref.size==self.ctrl_dim
             ref = const_ref
-        self.spline_ref.set(2, ref.reshape(1, -1), [ctrl_time])
+        # self.spline_ref.set(2, ref.reshape(1, -1), [ctrl_time])
+        n = ref.shape[0]
+        self.ctrlRef = SecondOrderCtrlRef(ctrl_time, ref, np.zeros((n)), np.zeros((n)), 1.)
         self.ctrl_time = ctrl_time
 
     def setSplineRef(self, points: np.array, times: np.array, append: bool = False) -> None:
         """[core] set the spline; when overwriting, times are relative to the *current* ctrl_time"""
-        if not append:
-            self.spline_ref.overwriteSmooth(points, times, self.ctrl_time)
-        else:
-            raise NotImplementedError()
+        # if not append:
+        #     self.spline_ref.overwriteSmooth(points, times, self.ctrl_time)
+        # else:
+        raise NotImplementedError()
 
     def getLinearizedSystem(
         self,

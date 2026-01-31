@@ -1,6 +1,6 @@
 # initial version from e05-RobotGym.py (robot learning course)
 
-from .mujoco_sim import MujocoSim, MjSimState
+from .mujoco_sim import *
 from gymnasium import Env, spaces
 import numpy as np
 from dataclasses import dataclass
@@ -109,10 +109,14 @@ class MujocoGym(Env):
             self.sim.Kd = 0.01*action[-1]
             ctrl_ref = self.action_scale * action[:-1].reshape(1, self.sim.ctrl_dim).copy()
         else:
-            ctrl_ref = self.action_scale * action.reshape(1, self.sim.ctrl_dim).copy()
+            action_delta = self.action_scale * action.reshape(1, self.sim.ctrl_dim).copy()
+        current_x = x_now.qpos[: self.sim.ctrl_dim]
+        current_v = x_now.qvel[: self.sim.ctrl_dim]
+        current_r = self.sim.ctrlRef.eval(self.sim.ctrl_time)
+        self.sim.ctrlRef = SecondOrderCtrlRef(self.sim.ctrl_time, current_r, current_v, action_delta, 2.*self.cfg.tau_step)
         # ctrl_ref += self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # NEW! relativ        
-        ctrl_ref += x_now.qpos[: self.sim.ctrl_dim] # WATCH - relative to current position
-        self.sim.setSplineRef(ctrl_ref, np.array([2.*self.cfg.tau_step]), append=False)
+        # ctrl_ref += ctrl_delta + x_now.qpos[: self.sim.ctrl_dim] # WATCH - relative to current position
+        # self.sim.setSplineRef(ctrl_ref, np.array([2.*self.cfg.tau_step]), append=False)
         # self.sim.resetSplineRef(const_ref=ctrl_ref, ctrl_time=self.sim.ctrl_time) # this would be the command to set a constant ref -- but not good for larget tau_step
 
         # step
