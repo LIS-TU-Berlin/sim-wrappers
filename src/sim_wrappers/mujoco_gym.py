@@ -109,7 +109,7 @@ class MujocoGym(Env):
             self.sim.Kd = 0.01*action[-1]
             ctrl_ref = self.action_scale * action[:-1].reshape(1, self.sim.ctrl_dim).copy()
         else:
-            action_delta = self.action_scale * action.reshape(1, self.sim.ctrl_dim).copy()
+            action_delta = self.action_scale * action
         current_x = x_now.qpos[: self.sim.ctrl_dim]
         current_v = x_now.qvel[: self.sim.ctrl_dim]
         current_r = self.sim.ctrlRef.eval(self.sim.ctrl_time)
@@ -144,7 +144,8 @@ class MujocoGym(Env):
     
     def observation_fct(self, x: MjSimState, without_goal=False):
         obs = np.concatenate((x.qpos[:-4], self.cfg.obs_vel_scale * x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
-        obs = np.concatenate((obs, .01 * x.act))
+        #obs = np.concatenate((obs, .01 * x.act))
+        obs = np.concatenate((obs, 20.*(self.sim.ctrlRef.eval(self.sim.ctrl_time) - x.qpos[:self.sim.ctrl_dim]) )) #the reference error (=admission, propto act)
         feat = self.goal_feat_map(obs)
         if not without_goal:
             obs = np.concatenate((obs, self.goal_feat - feat)) #WATCH! relative goal!!
