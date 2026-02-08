@@ -24,23 +24,38 @@ class MjSimState:
 class SecondOrderCtrlRef:
     def __init__(self, t0, x0, v0, delta, tau):
         self.t0 = t0
-        self.x0 = x0
-        self.v0 = v0
+        self.x0 = x0.copy()
+        self.v0 = v0.copy()
         self.a  = (delta-tau*v0)/(tau*tau) #at time t=tau, f(t) = x0+delta
-    def eval(self, t):
+
+    def eval(self, t, single_th=-1):
         d = t - self.t0
-        return self.a*(d*d) + self.v0*d + self.x0
+        if single_th==-1:
+            return self.a*(d*d) + self.v0*d + self.x0
+        else:
+            return self.a[single_th]*(d*d) + self.v0[single_th]*d + self.x0[single_th]
+    
+    def reshape(self, num_threads):
+        self.a = self.a.reshape(num_threads, -1)
+        self.v0 = self.v0.reshape(num_threads, -1)
+        self.x0 = self.x0.reshape(num_threads, -1)
+
+    def reset(self, x0, th):
+        assert self.x0.ndim==2
+        self.a[th] *= 0.
+        self.v0[th] *= 0.
+        self.x0[th] = x0
 
 class MujocoSim:
-    ctrl_time: float  # same as mj's state.time
     mj_steps = 0
+    ctrl_time = 0.
+    ctrl_costs = 0.
+
     view_speed = -1.
     save_qpos = -1
     saved_qpos = []
     save_images = False
     saved_images = []
-    ctrl_costs = 0.
-    Kd = None
 
     def __init__(
         self,
@@ -77,20 +92,29 @@ class MujocoSim:
         else:
             self.viewer = None
 
-        self.freeobjs = []
-        for f in C.getRoots():
-            if "mass" in f.asDict():
-                self.freeobjs.append(f)
         self.C = C
+        self.freeobjs = []
+        for f in C.getFrames():
+            if f.getParent() == None or (f.getJointType() == ry.JT.free):
+                # print(f.name)
+                if "mass" in f.asDict():
+                    self.freeobjs.append(f)
 
-        assert self.data.qpos.size == self.C.getJointDimension() + 7 * len(self.freeobjs)
-        assert self.ctrl_dim == self.C.getJointDimension()
+        self.ctrl_indices = []
+        for i in range(self.ctrl_dim):
+            id = self.model.actuator(i).trnid[0]
+            qid = self.model.joint(id).qposadr
+            self.ctrl_indices.append(int(qid[0]))
+        self.ctrl_indices = np.array(self.ctrl_indices, dtype='int32')
+
+        assert self.data.qpos.size == self.C.getJointDimension() #+ 7 * len(self.freeobjs)
+        # assert self.ctrl_dim == self.C.getJointDimension()
         assert self.data.time == 0.
 
         self.pushConfigToSim()
-        self.resetSplineRef(ctrl_time=0.)
+        # self.resetSplineRef(ctrl_time=0.)
 
-        print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} and {len(self.freeobjs)} free objects (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})")
+        print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} and {len(self.freeobjs)} free objects (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})") # ctrl_indices:{self.ctrl_indices}
 
     def __del__(self):
         if hasattr(self, "viewer") and self.viewer is not None:
@@ -98,11 +122,12 @@ class MujocoSim:
 
     def pushConfigToSim(self):
         """[internal] (re)set the mujoco state to be equal to the self.C state"""
-        self.data.qpos[: self.q_dim] = self.C.getJointState()
-        self.data.qvel[: self.q_dim] = np.zeros(self.q_dim)
-        for i, f in enumerate(self.freeobjs):
-            self.data.qpos[self.q_dim + 7 * i : self.q_dim + 7 * (i + 1)] = f.getPose()
-            self.data.qvel[self.q_dim + 6 * i : self.q_dim + 6 * (i + 1)] = np.zeros(6)
+        self.data.qpos = self.C.getJointState()
+        # self.data.qpos[: self.q_dim] = self.C.getJointState()
+        # self.data.qvel[: self.q_dim] = np.zeros(self.q_dim)
+        # for i, f in enumerate(self.freeobjs):
+        #     self.data.qpos[self.q_dim + 7 * i : self.q_dim + 7 * (i + 1)] = f.getPose()
+        #     self.data.qvel[self.q_dim + 6 * i : self.q_dim + 6 * (i + 1)] = np.zeros(6)
 
         mujoco.mj_forward(self.model, self.data)
 
@@ -114,25 +139,17 @@ class MujocoSim:
 
     def pullConfigFromSim(self):
         """[interna] set selt.C state equal to mujoco state"""
-        self.C.setJointState(self.data.qpos[: self.q_dim])
-        for i, f in enumerate(self.freeobjs):
-            f.setPose(self.data.qpos[self.q_dim + 7 * i : self.q_dim + 7 * (i + 1)])
+        self.C.setJointState(self.data.qpos)
+        # self.C.setJointState(self.data.qpos[: self.q_dim])
+        # for i, f in enumerate(self.freeobjs):
+        #     f.setPose(self.data.qpos[self.q_dim + 7 * i : self.q_dim + 7 * (i + 1)])
 
     def multi_sim_steps(self, steps: int) -> None:
         view_steps = math.ceil(0.02 / self.tau_sim * self.view_speed)
         for k in range(steps):
             # ctrl_ref = self.spline_ref.eval3(self.ctrl_time)[0]
             ctrl_ref = self.ctrlRef.eval(self.ctrl_time)
-            if self.Kd is not None:
-                assert self.data.qvel.size == 9
-                assert ctrl_ref.size == 3
-                effvel = self.data.qvel[:2]
-                objvel = self.data.qvel[3:5]  
-                objpos = self.data.qpos[3:5] - self.data.qpos[:2]
-                effpos = self.data.qpos[:2] - ctrl_ref[:2]
-                for i in range(2):
-                    ctrl_ref[i] += np.dot(self.Kd, np.array([objpos[i], objvel[i], effpos[i], effvel[i]])) # * (effvel-objvel)
-            self.data.ctrl[:] = ctrl_ref
+            self.data.ctrl = ctrl_ref.reshape(-1)
 
             mujoco.mj_step(self.model, self.data)
             self.mj_steps += 1
@@ -189,8 +206,9 @@ class MujocoSim:
     def resetSplineRef(self, ctrl_time: float = 0., const_ref=None) -> None:
         """[core] reset the spline; ctrl_time gives the *absolute* time (relating to mujoco's time state) of the spline knots"""
         # self.spline_ref = ry.BSpline()
+        raise NotImplementedError()
         if const_ref is None:
-            ref = self.data.qpos[: self.ctrl_dim]
+            ref = self.data.qpos[self.ctrl_indices]
         else:
             assert const_ref.size==self.ctrl_dim
             ref = const_ref
@@ -204,7 +222,14 @@ class MujocoSim:
         # if not append:
         #     self.spline_ref.overwriteSmooth(points, times, self.ctrl_time)
         # else:
+        # NEW:
         raise NotImplementedError()
+
+    def updateCtrlRef(self, delta, time_horizon):
+        raise NotImplementedError()
+        current_vel = self.data.qvel[: self.ctrl_dim]
+        current_ref = self.ctrlRef.eval(self.ctrl_time)
+        self.ctrlRef = SecondOrderCtrlRef(self.ctrl_time, current_ref, current_vel, delta, time_horizon)
 
     def getLinearizedSystem(
         self,

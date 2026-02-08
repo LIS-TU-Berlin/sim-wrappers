@@ -5,6 +5,7 @@ from gymnasium import Env, spaces
 import numpy as np
 from dataclasses import dataclass
 import math
+from enum import Enum
 
 ###############################################################################
 
@@ -16,16 +17,21 @@ class MujocoGymConfig:
     cost_const = 0.0
     action_scale_sqrttau = 0.5   #WATCH
     obs_vel_scale = .05
-    reward_next_state = True # WATCH
-    use_Kd_ctrl = False
+    obs_referr_scale = 20.
 
+class ThreadStatus(Enum):
+    preinit = 1
+    running = 2
+    terminated = 3
+    truncated = 4
 
 class MujocoGym(Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
     render_mode = 'human'
     verbose = 0
+    qpos_offset = None
 
-    def __init__(self, sim: MujocoSim, cfg: MujocoGymConfig, goal_feat_map = None):
+    def __init__(self, sim: MujocoSim, cfg: MujocoGymConfig, goal_feat_map = None, num_threads=1):
         self.sim = sim
         x0 = self.sim.getState()
         if x0.time > 0.:
@@ -34,19 +40,23 @@ class MujocoGym(Env):
 
         self.cfg = cfg
         self.goal_feat_map = goal_feat_map
-        self._max_episode_steps = self.cfg.time_limit/self.cfg.tau_step
 
-        # define the observation space (see also observation_fct())
-        obs, feat = self.observation_fct(x0, without_goal=True)
-        observation_dim = obs.size
-        observation_dim += feat.size
-        self.feat_shape = feat.shape  # Needed for MujocoGoalGym
+        self.num_threads = num_threads
+        self.thread_needs_reset = np.ones((num_threads), dtype=bool)
+        self.thread_time = np.zeros((num_threads))
+        self.ctrl_indices = self.sim.ctrl_indices.reshape(num_threads, -1)[0]
+
+        # to get the first observatin, we need to setup a ctrlRef, get a goal feature, then query an observation
+        cref = self.qpos[:, self.ctrl_indices]
+        self.sim.ctrlRef = SecondOrderCtrlRef(self.sim.ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 2.*self.cfg.tau_step)
+        self.goal_feat = self.goal_feat_map(self.qpos, self.qvel)
+        self.observation, feat = self.observation_fct(self.qpos, self.qvel, cref, self.goal_feat)
+        observation_dim = self.observation.size
         self.observation_space = spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
 
         # define the action space
         self.action_scale = self.cfg.action_scale_sqrttau*math.sqrt(self.cfg.tau_step)
-        num_ctrl_pts = 1
-        action_dim = num_ctrl_pts*self.sim.ctrl_dim + (1 if self.cfg.use_Kd_ctrl else 0)
+        action_dim = self.sim.ctrl_dim
         self.action_space = spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
 
         print(f"-- initialized MjGym with observation dim {observation_dim} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{feat.size}), action dim {action_dim}, tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
@@ -54,123 +64,139 @@ class MujocoGym(Env):
     def __del__(self):
         del self.sim
 
-    def set_start_goal(self, start: MjSimState, goal: MjSimState):
-        self.starts = start.as_vector().reshape(1,-1)
-        self.goals = goal.as_vector().reshape(1,-1)
+    def set_starts_goals2(self, starts_q: np.array, goals_q: np.array):
+        assert starts_q.shape[0]==goals_q.shape[0]
+        self.starts_q = starts_q
+        self.starts_v = np.zeros((starts_q.shape[0], self.sim.qvel_dim//self.num_threads))
+        self.goals_q = goals_q
+        self.goals_v = np.zeros((goals_q.shape[0], self.sim.qvel_dim//self.num_threads))
 
-    def set_starts_goals(self, starts: np.array, goals: np.array):
-        assert starts.shape[0]==goals.shape[0]
-        self.starts = starts
-        self.goals = goals
+    def auto_reset(self):
+        assert self.num_threads>0
+        # x = self.sim.getState()
+        qpos, qvel, act = self.qpos, self.qvel, self.act
+        needs_set = False
+        for th in range(self.num_threads):
+            if self.thread_needs_reset[th]:
+                i = np.random.randint(0, self.starts_q.shape[0])
+                self.goal_feat[th] = self.goal_feat_map(self.goals_q[i:i+1], self.goals_v[i:i+1])
+
+                qpos[th] = self.starts_q[i]
+                qvel[th] = self.starts_v[i]
+                act[th] *= 0.
+                
+                cref = qpos[th:th+1, self.ctrl_indices]
+                self.sim.ctrlRef.reset(cref, th)
+                self.observation[th], _ = self.observation_fct(qpos[th:th+1], qvel[th:th+1], cref, self.goal_feat[th:th+1])
+                self.thread_needs_reset[th] = False
+                self.thread_time[th] = 0.
+                needs_set = True
+                
+        if needs_set:
+            # self.sim.setState(x)
+            if self.qpos_offset is None:
+                self.sim.data.qpos = qpos.reshape(-1)
+            else:
+                self.sim.data.qpos = qpos.reshape(-1) + self.qpos_offset
+            self.sim.data.qvel = qvel.reshape(-1)
+            self.sim.data.actuator_force = act.reshape(-1)
+            mujoco.mj_forward(self.sim.model, self.sim.data)
+
+        return self.observation, {}
 
     def reset(self, seed=None, options=None):
         if seed is not None:
             super().reset(seed=int(seed))
 
-        i = np.random.randint(0, self.starts.shape[0])
-        self.goal_state = self.sim.to_state(self.goals[i])
-        _, self.goal_feat = self.observation_fct(self.goal_state, without_goal=True)
-        if self.verbose>2:
-            self.sim.setState(self.goal_state)
-            self.sim.C.view(self.verbose>3, f'gym GOAL - time limit:{self.cfg.time_limit:6.3f}, feature: {self.goal_feat}')
-            self.goal_image = self.sim.C.get_viewer().getRgb().copy()
+        self.thread_needs_reset[:] = True
+        
+        return self.auto_reset()    
 
-        x0 = self.sim.to_state(self.starts[i])
-        x0.time = 0.
-        x0.act *= 0.
-        self.sim.setState(x0)
-        self.sim.resetSplineRef(ctrl_time=0.)
+        i = np.random.randint(0, self.starts_q.shape[0])
+        self.goal_feat = self.goal_feat_map(self.goals_q[i:i+1], self.goals_v[i:i+1])
 
-        # if self.random_reset:
-        #     # resetting the box position to a random initial position -- makes it MUCH harder
-        #     self.box_pos0 = np.array([.0,-.1,.7]) + .7 * np.random.rand(3)
-        #     self.box_pos0[2]=.7
+        # x0 = MjSimState(0., self.starts_q[i], self.starts_v[i], np.zeros((self.sim.ctrl_dim)))
+        # self.sim.setState(x0)
+        qpos, qvel, act = self.qpos, self.qvel, self.act
+
+        qpos = self.starts_q[i]
+        qvel = self.starts_v[i]
+        act *= 0.
+        self.sim.data.qpos = qpos
+        self.sim.data.qvel = qvel
+        self.sim.data.actuator_force = act
+        mujoco.mj_forward(self.sim.model, self.sim.data)
+
+        # self.sim.resetSplineRef(ctrl_time=0.)
+        cref = self.qpos[:, self.ctrl_indices]
+        self.sim.ctrlRef.reset(cref, 0)
+        self.thread_time[0] = 0.
+
         if self.verbose>2:
             self.sim.C.view(self.verbose>3, f'gym START - t:{self.sim.ctrl_time:6.3f}')
 
-        observation, feat = self.observation_fct(x0)
+        observation, feat = self.observation_fct(self.starts_q[i:i+1], self.starts_v[i:i+1], self.sim.ctrlRef.eval(self.sim.ctrl_time))
         info = { 'start_goal_id': i, 'start_state_feat': feat}
         return observation, info
 
     def step(self, action):
-        assert action.ndim==1, 'need a single vector action'
-        # reward and termination depends on x_now, not x_next!!
-        x_now = self.sim.getState()
-        if not self.cfg.reward_next_state:
-            obs_now, feat_now = self.observation_fct(x_now)
-            reward = self.reward_fct(obs_now, feat_now)
-            terminated = self.is_goal(obs_now, feat_now)
-            # if terminated: # and self.sim.view_speed==1.:
-            #     self.sim.C.view(False, f'termination at time {x_now.time}')
+        if action.ndim==1:
+            action = action.reshape(self.num_threads, -1)
+        assert action.shape[0]==self.num_threads
+        assert action.shape[1]==len(self.ctrl_indices)
 
         # set action
-        if self.cfg.use_Kd_ctrl:
-            assert action.size==self.sim.ctrl_dim+1
-            self.sim.Kd = 0.01*action[-1]
-            ctrl_ref = self.action_scale * action[:-1].reshape(1, self.sim.ctrl_dim).copy()
-        else:
-            action_delta = self.action_scale * action
-        current_x = x_now.qpos[: self.sim.ctrl_dim]
-        current_v = x_now.qvel[: self.sim.ctrl_dim]
-        current_r = self.sim.ctrlRef.eval(self.sim.ctrl_time)
-        self.sim.ctrlRef = SecondOrderCtrlRef(self.sim.ctrl_time, current_r, current_v, action_delta, 2.*self.cfg.tau_step)
-        # ctrl_ref += self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # NEW! relativ        
-        # ctrl_ref += ctrl_delta + x_now.qpos[: self.sim.ctrl_dim] # WATCH - relative to current position
-        # self.sim.setSplineRef(ctrl_ref, np.array([2.*self.cfg.tau_step]), append=False)
-        # self.sim.resetSplineRef(const_ref=ctrl_ref, ctrl_time=self.sim.ctrl_time) # this would be the command to set a constant ref -- but not good for larget tau_step
+        action_delta = self.action_scale * action
+        current_ref = self.sim.ctrlRef.eval(self.sim.ctrl_time)
+        current_vel = self.qvel[:, self.ctrl_indices]
+        self.sim.ctrlRef = SecondOrderCtrlRef(self.sim.ctrl_time, current_ref, current_vel, action_delta, 2.*self.cfg.tau_step)
 
         # step
         self.sim.step(tau_step=self.cfg.tau_step)
+        self.thread_time += self.cfg.tau_step
   
         # get obs and truncation
-        x_next = self.sim.getState()
-        assert x_next.time == self.sim.ctrl_time, "why not?"
-        obs_next, feat_next = self.observation_fct(x_next)
-        if self.cfg.reward_next_state:
-            reward = self.reward_fct(obs_next, feat_next)
-            terminated = self.is_goal(obs_next, feat_next)
-        truncated = (self.sim.ctrl_time >= self.cfg.time_limit) # terminated and truncated difference is super important
+        self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.sim.ctrlRef.eval(self.sim.ctrl_time), self.goal_feat)
+        reward = self.reward_fct(self.observation, feat)
+        terminated = self.is_goal(self.observation, feat)
+        truncated = (self.thread_time >= self.cfg.time_limit) # terminated and truncated difference is super important
+        self.thread_needs_reset = np.logical_or(terminated, truncated)
 
-        if self.verbose>2:
-            if terminated:
-                self.sim.C.view(self.verbose>3, f'gym END - terminated, t:{self.sim.ctrl_time:6.3f}, reward: {reward}')
-            elif truncated:
-                self.sim.C.view(self.verbose>3, f'gym END - truncated, t:{self.sim.ctrl_time:6.3f}, reward: {reward}')
-            # else:
-            #     self.sim.C.view(False, f'GYM t:{self.sim.ctrl_time:6.3f} (reward: {reward})')
+        # if self.verbose>2:
+        #     if terminated:
+        #         self.sim.C.view(self.verbose>3, f'gym END - terminated, t:{self.sim.ctrl_time:6.3f}, reward: {reward}')
+        #     elif truncated:
+        #         self.sim.C.view(self.verbose>3, f'gym END - truncated, t:{self.sim.ctrl_time:6.3f}, reward: {reward}')
+        #     # else:
+        #     #     self.sim.C.view(False, f'GYM t:{self.sim.ctrl_time:6.3f} (reward: {reward})')
 
-        info = { 'feat_next': feat_next }
-        return obs_next, reward, terminated, truncated, info
+        return self.observation, reward, terminated, truncated, {}
     
-    def observation_fct(self, x: MjSimState, without_goal=False):
-        obs = np.concatenate((x.qpos[:-4], self.cfg.obs_vel_scale * x.qvel)) # WATCH!!  object pos only;  qvel rescaled to delta-position!
-        #obs = np.concatenate((obs, .01 * x.act))
-        obs = np.concatenate((obs, 20.*(self.sim.ctrlRef.eval(self.sim.ctrl_time) - x.qpos[:self.sim.ctrl_dim]) )) #the reference error (=admission, propto act)
-        feat = self.goal_feat_map(obs)
-        if not without_goal:
-            obs = np.concatenate((obs, self.goal_feat - feat)) #WATCH! relative goal!!
+    def observation_fct(self, qpos, qvel, cref, goal_feat):
+        o_pos = qpos[:, :-4]
+        o_vel = self.cfg.obs_vel_scale * qvel
+        o_err = self.cfg.obs_referr_scale * (cref - qpos[:, self.ctrl_indices]) #self.sim.ctrlRef.eval(self.sim.ctrl_time)
+        obs = np.hstack((o_pos, o_vel, o_err))
+        feat = self.goal_feat_map(qpos, qvel)
+        o_goal = goal_feat - feat
+        obs = np.hstack((obs, o_goal))
         return obs, feat
 
     def is_goal(self, obs, feat):
-        err = np.linalg.norm(feat-self.goal_feat)
+        err = np.linalg.norm(feat-self.goal_feat, axis=1)
         # print('err', err)
-        if err <= self.cfg.goal_feat_eps:
-            return True
-        return False
+        return (err <= self.cfg.goal_feat_eps)
 
     def reward_fct(self, obs, feat):
-        if self.is_goal(obs, feat):
-            return 1.
-        if self.cfg.cost_const>0.:
-            return -self.cfg.tau_step * self.cfg.cost_const
-        return 0.
-        # z = self.feature_map(obs)
-        # phi = z - self.feature_target
-        # return -np.sum(np.square(phi))
+        return np.where(self.is_goal(obs, feat), 1., 0.)
+        # if self.cfg.cost_const>0.:
+        #     return -self.cfg.tau_step * self.cfg.cost_const
         
     def rollout(self, pi, return_data=False, absolute_actions=False):
         '''helper to play and view a policy'''
-        obs, info = self.reset()
+
+        obs, info = self.auto_reset()
+        # obs, info = self.reset()
 
         if return_data:
             data = {'state': [], 'obs': [], 'action': [], 'ctrl_cost': [], 'next_obs': [], 'reward': [], 'terminal': []}
@@ -198,7 +224,7 @@ class MujocoGym(Env):
             t += 1
             if self.verbose>1:
                 print("reward: ", reward)
-            if truncated: #terminated or 
+            if np.all(truncated): #terminated or 
                 break
 
         if self.verbose>0:
@@ -208,6 +234,21 @@ class MujocoGym(Env):
             for key, value in data.items():
                 data[key] = np.stack(value)
             return data
+
+    @property
+    def qpos(self) -> np.array:
+        if self.qpos_offset is not None:
+            return (self.sim.data.qpos-self.qpos_offset).reshape(self.num_threads, -1)
+        else:
+            return self.sim.data.qpos.reshape(self.num_threads, -1)
+
+    @property
+    def qvel(self) -> np.array:
+        return self.sim.data.qvel.reshape(self.num_threads, -1)
+
+    @property
+    def act(self) -> np.array:
+        return self.sim.data.actuator_force.reshape(self.num_threads, -1)
 
     def render(self):
         '''also part of the env.Gym'''
