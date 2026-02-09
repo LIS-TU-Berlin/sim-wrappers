@@ -48,7 +48,7 @@ class MujocoGym(Env):
 
         # to get the first observatin, we need to setup a ctrlRef, get a goal feature, then query an observation
         cref = self.qpos[:, self.ctrl_indices]
-        self.sim.ctrlRef = SecondOrderCtrlRef(self.sim.ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 2.*self.cfg.tau_step)
+        self.sim.ctrlRef_poly = SecondOrderCtrlRef(self.sim.ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 2.*self.cfg.tau_step)
         self.goal_feat = self.goal_feat_map(self.qpos, self.qvel)
         self.observation, feat = self.observation_fct(self.qpos, self.qvel, cref, self.goal_feat)
         observation_dim = self.observation.size
@@ -66,9 +66,9 @@ class MujocoGym(Env):
 
     def set_starts_goals2(self, starts_q: np.array, goals_q: np.array):
         assert starts_q.shape[0]==goals_q.shape[0]
-        self.starts_q = starts_q
+        self.starts_q = np.atleast_2d(starts_q)
         self.starts_v = np.zeros((starts_q.shape[0], self.sim.qvel_dim//self.num_threads))
-        self.goals_q = goals_q
+        self.goals_q = np.atleast_2d(goals_q)
         self.goals_v = np.zeros((goals_q.shape[0], self.sim.qvel_dim//self.num_threads))
 
     def auto_reset(self):
@@ -86,7 +86,10 @@ class MujocoGym(Env):
                 act[th] *= 0.
                 
                 cref = qpos[th:th+1, self.ctrl_indices]
-                self.sim.ctrlRef.reset(cref, th)
+                if self.sim.ctrlRef_poly is not None:
+                    self.sim.ctrlRef_poly.reset(cref, th)
+                if self.sim.ctrlRef_spline is not None:
+                    self.sim.resetSplineRef(0., cref)
                 self.observation[th], _ = self.observation_fct(qpos[th:th+1], qvel[th:th+1], cref, self.goal_feat[th:th+1])
                 self.thread_needs_reset[th] = False
                 self.thread_time[th] = 0.
@@ -147,16 +150,22 @@ class MujocoGym(Env):
 
         # set action
         action_delta = self.action_scale * action
-        current_ref = self.sim.ctrlRef.eval(self.sim.ctrl_time)
-        current_vel = self.qvel[:, self.ctrl_indices]
-        self.sim.ctrlRef = SecondOrderCtrlRef(self.sim.ctrl_time, current_ref, current_vel, action_delta, 2.*self.cfg.tau_step)
-
+        if self.sim.ctrlRef_poly is not None:
+            current_ref = self.sim.ctrlRef_poly.eval(self.sim.ctrl_time)
+            current_vel = self.qvel[:, self.ctrl_indices]
+            self.sim.ctrlRef_poly = SecondOrderCtrlRef(self.sim.ctrl_time, current_ref, current_vel, action_delta, 2.*self.cfg.tau_step)
+        else:
+            # current_pos = self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # relativ to current ref
+            current_pos = self.qpos[:, self.ctrl_indices]
+            target = action_delta + current_pos
+            self.sim.updateSplineRef(target, np.array([2.*self.cfg.tau_step]), append=False)
+ 
         # step
         self.sim.step(tau_step=self.cfg.tau_step)
         self.thread_time += self.cfg.tau_step
   
         # get obs and truncation
-        self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.sim.ctrlRef.eval(self.sim.ctrl_time), self.goal_feat)
+        self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.sim.get_ctrlRef(), self.goal_feat)
         reward = self.reward_fct(self.observation, feat)
         terminated = self.is_goal(self.observation, feat)
         truncated = (self.thread_time >= self.cfg.time_limit) # terminated and truncated difference is super important
@@ -195,8 +204,7 @@ class MujocoGym(Env):
     def rollout(self, pi, return_data=False, absolute_actions=False):
         '''helper to play and view a policy'''
 
-        obs, info = self.auto_reset()
-        # obs, info = self.reset()
+        obs, info = self.reset()
 
         if return_data:
             data = {'state': [], 'obs': [], 'action': [], 'ctrl_cost': [], 'next_obs': [], 'reward': [], 'terminal': []}
