@@ -51,15 +51,15 @@ class MujocoGym(Env):
         self.sim.ctrlRef_poly = SecondOrderCtrlRef(self.sim.ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 2.*self.cfg.tau_step)
         self.goal_feat = self.goal_feat_map(self.qpos, self.qvel)
         self.observation, feat = self.observation_fct(self.qpos, self.qvel, cref, self.goal_feat)
-        observation_dim = self.observation.size
-        self.observation_space = spaces.Box(-2., +2., shape=(observation_dim,), dtype=np.float32)
+        # observation_dim = self.observation.shape[1]
+        self.observation_space = spaces.Box(-2., +2., shape=self.observation.shape, dtype=np.float32)
 
         # define the action space
         self.action_scale = self.cfg.action_scale_sqrttau*math.sqrt(self.cfg.tau_step)
-        action_dim = self.sim.ctrl_dim
-        self.action_space = spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
+        action_dim = self.sim.ctrl_dim // num_threads
+        self.action_space = spaces.Box(-1., +1., shape=(num_threads, action_dim), dtype=np.float32)
 
-        print(f"-- initialized MjGym with observation dim {observation_dim} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{feat.size}), action dim {action_dim}, tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
+        print(f"-- initialized MjGym with observation dim {self.observation.shape} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{feat.size}), action dim {action_dim}, tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
 
     def __del__(self):
         del self.sim

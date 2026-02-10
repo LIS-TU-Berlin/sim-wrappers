@@ -158,8 +158,10 @@ class MujocoSim:
     def get_ctrlRef(self):
         if self.ctrlRef_poly is not None:
             cref = self.ctrlRef_poly.eval(self.ctrl_time)
-        else:
+        elif self.ctrlRef_spline is not None:
             cref = self.ctrlRef_spline.eval3(self.ctrl_time)[0]
+        else:
+            raise Exception('you need to set a ctrl reference')
         return cref
 
     def step(self, tau_step: float) -> None:
