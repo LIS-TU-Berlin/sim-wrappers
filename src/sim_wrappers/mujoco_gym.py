@@ -16,6 +16,7 @@ class MujocoGymConfig:
     goal_feat_eps = 1e-2   #WATCH
     cost_const = 0.0
     action_scale_sqrttau = 0.5   #WATCH
+    obs_pos_scale = 1.
     obs_vel_scale = .05
     obs_referr_scale = 20.
 
@@ -185,13 +186,14 @@ class MujocoGym(Env):
         return self.observation, reward, terminated, truncated, {}
     
     def observation_fct(self, qpos, qvel, cref, goal_feat):
-        o_pos = qpos[:, :-4]
+        o_pos = self.cfg.obs_pos_scale * qpos[:, :-4]
         o_vel = self.cfg.obs_vel_scale * qvel
         o_err = self.cfg.obs_referr_scale * (cref - qpos[:, self.ctrl_indices]) #self.sim.ctrlRef.eval(self.sim.ctrl_time)
         obs = np.hstack((o_pos, o_vel, o_err))
         feat = self.goal_feat_map(qpos, qvel)
-        o_goal = goal_feat - feat
+        o_goal = self.cfg.obs_pos_scale * (goal_feat - feat)
         obs = np.hstack((obs, o_goal))
+        obs = np.clip(obs, -2., 2.)
         return obs, feat
 
     def is_goal(self, obs, feat):
