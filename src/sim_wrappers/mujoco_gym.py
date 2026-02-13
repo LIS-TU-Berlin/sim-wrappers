@@ -48,6 +48,7 @@ class MujocoGym(Env):
 
         # to get the first observatin, we need to setup a ctrlRef, get a goal feature, then query an observation
         cref = self.qpos[:, self.ctrl_indices]
+        self.sim.ctrlRef_spline = None
         self.sim.ctrlRef_poly = SecondOrderCtrlRef(self.sim.ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 2.*self.cfg.tau_step)
         self.goal_feat = self.goal_feat_map(self.qpos, self.qvel)
         self.observation, feat = self.observation_fct(self.qpos, self.qvel, cref, self.goal_feat)
@@ -179,6 +180,8 @@ class MujocoGym(Env):
         #     # else:
         #     #     self.sim.C.view(False, f'GYM t:{self.sim.ctrl_time:6.3f} (reward: {reward})')
 
+        if self.num_threads==1: # for stable_baselines to work..
+            reward = reward.item()
         return self.observation, reward, terminated, truncated, {}
     
     def observation_fct(self, qpos, qvel, cref, goal_feat):
@@ -201,7 +204,7 @@ class MujocoGym(Env):
         # if self.cfg.cost_const>0.:
         #     return -self.cfg.tau_step * self.cfg.cost_const
         
-    def rollout(self, pi, return_data=False, absolute_actions=False):
+    def rollout(self, pi, return_data=False):
         '''helper to play and view a policy'''
 
         obs, info = self.reset()
@@ -214,9 +217,6 @@ class MujocoGym(Env):
         while True:
             state = self.sim.getState()
             action = pi(obs, t)
-            if absolute_actions: # pi returns absolute actions, need to convert back before executing
-                action = action - state.qpos[:self.sim.ctrl_dim]
-                action /= self.action_scale
             self.sim.ctrl_costs=0.
             next_obs, reward, terminated, truncated, info = self.step(action)
             if return_data:

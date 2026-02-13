@@ -26,15 +26,22 @@ class SecondOrderCtrlRef:
         self.t0 = t0
         self.x0 = x0.copy()
         self.v0 = v0.copy()
-        self.a  = (delta-tau*v0)/(tau*tau) #at time t=tau, f(t) = x0+delta
+        self.a  = (delta-tau*v0)/(tau*tau) #at time t=tau, f(t) = x0 + .5*tau*v0 + .5*delta
 
     def eval(self, t, single_th=-1):
         d = t - self.t0
         if single_th==-1:
-            return self.a*(d*d) + self.v0*d + self.x0
+            if isinstance(d, np.ndarray):
+                return (d*d).reshape(-1,1)*self.a + d.reshape(-1,1)*self.v0 + self.x0
+            else:
+                return self.a*(d*d) + self.v0*d + self.x0
         else:
             return self.a[single_th]*(d*d) + self.v0[single_th]*d + self.x0[single_th]
-    
+
+    def eval_vel(self, t):
+        d = t - self.t0
+        return self.a*d + self.v0
+
     def reshape(self, num_threads):
         self.a = self.a.reshape(num_threads, -1)
         self.v0 = self.v0.reshape(num_threads, -1)
@@ -196,18 +203,26 @@ class MujocoSim:
         assert s.size==1+nq+nv+self.ctrl_dim, "wrong size"
         return MjSimState(s[0], s[1:1+nq], s[1+nq:1+nq+nv], s[1+nq+nv:])
 
+    def resetPolyRef(self, ctrl_time: float = 0.) -> None:
+        cref = self.data.qpos[self.ctrl_indices]
+        self.ctrlRef_spline = None
+        self.ctrlRef_poly = SecondOrderCtrlRef(ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 1.)
+        self.ctrl_time = ctrl_time
+
     def resetSplineRef(self, ctrl_time: float = 0., const_ref=None) -> None:
         """[core] reset the spline; ctrl_time gives the *absolute* time (relating to mujoco's time state) of the spline knots"""
+        self.ctrlRef_poly = None
         self.ctrlRef_spline = ry.BSpline()
         if const_ref is None:
-            ref = self.data.qpos[self.ctrl_indices]
+            cref = self.data.qpos[self.ctrl_indices]
         else:
-            ref = const_ref
-        self.ctrlRef_spline.set(2, ref.reshape(1, -1), [ctrl_time])
+            cref = const_ref
+        self.ctrlRef_spline.set(2, cref.reshape(1, -1), [ctrl_time])
         self.ctrl_time = ctrl_time
 
     def updateSplineRef(self, points: np.array, times: np.array, append: bool = False) -> None:
         """[core] set the spline; when overwriting, times are relative to the *current* ctrl_time"""
+        self.ctrlRef_poly = None
         if not append:
             self.ctrlRef_spline.overwriteSmooth(points, times, self.ctrl_time)
         else:
