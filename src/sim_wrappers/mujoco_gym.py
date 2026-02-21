@@ -20,19 +20,13 @@ class MujocoGymConfig:
     obs_vel_scale = .05
     obs_referr_scale = 20.
 
-class ThreadStatus(Enum):
-    preinit = 1
-    running = 2
-    terminated = 3
-    truncated = 4
-
 class MujocoGym(Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
     render_mode = 'human'
     verbose = 0
     qpos_offset = None
 
-    def __init__(self, sim: MujocoSim, cfg: MujocoGymConfig, goal_feat_map = None, num_threads=1):
+    def __init__(self, sim: MujocoSim, cfg: MujocoGymConfig, goal_feat_map = None, num_scenes=1):
         self.sim = sim
         x0 = self.sim.getState()
         if x0.time > 0.:
@@ -42,10 +36,10 @@ class MujocoGym(Env):
         self.cfg = cfg
         self.goal_feat_map = goal_feat_map
 
-        self.num_threads = num_threads
-        self.thread_needs_reset = np.ones((num_threads), dtype=bool)
-        self.thread_time = np.zeros((num_threads))
-        self.ctrl_indices = self.sim.ctrl_indices.reshape(num_threads, -1)[0]
+        self.num_scenes = num_scenes
+        self.scene_needs_reset = np.ones((num_scenes), dtype=bool)
+        self.scene_time = np.zeros((num_scenes))
+        self.ctrl_indices = self.sim.ctrl_indices.reshape(num_scenes, -1)[0]
 
         # to get the first observatin, we need to setup a ctrlRef, get a goal feature, then query an observation
         cref = self.qpos[:, self.ctrl_indices]
@@ -58,8 +52,8 @@ class MujocoGym(Env):
 
         # define the action space
         self.action_scale = self.cfg.action_scale_sqrttau*math.sqrt(self.cfg.tau_step)
-        action_dim = self.sim.ctrl_dim // num_threads
-        self.action_space = spaces.Box(-1., +1., shape=(num_threads, action_dim), dtype=np.float32)
+        action_dim = self.sim.ctrl_dim // num_scenes
+        self.action_space = spaces.Box(-1., +1., shape=(num_scenes, action_dim), dtype=np.float32)
 
         print(f"-- initialized MjGym with observation dim {self.observation.shape} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{feat.size}), action dim {action_dim}, tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
 
@@ -69,32 +63,33 @@ class MujocoGym(Env):
     def set_starts_goals2(self, starts_q: np.array, goals_q: np.array):
         assert starts_q.shape[0]==goals_q.shape[0]
         self.starts_q = np.atleast_2d(starts_q)
-        self.starts_v = np.zeros((starts_q.shape[0], self.sim.qvel_dim//self.num_threads))
+        self.starts_v = np.zeros((starts_q.shape[0], self.sim.qvel_dim//self.num_scenes))
         self.goals_q = np.atleast_2d(goals_q)
-        self.goals_v = np.zeros((goals_q.shape[0], self.sim.qvel_dim//self.num_threads))
+        self.goals_v = np.zeros((goals_q.shape[0], self.sim.qvel_dim//self.num_scenes))
 
     def auto_reset(self):
-        assert self.num_threads>0
+        assert self.num_scenes>0
         # x = self.sim.getState()
         qpos, qvel, act = self.qpos, self.qvel, self.act
         needs_set = False
-        for th in range(self.num_threads):
-            if self.thread_needs_reset[th]:
+        
+        for s in range(self.num_scenes):
+            if self.scene_needs_reset[s]:
                 i = np.random.randint(0, self.starts_q.shape[0])
-                self.goal_feat[th] = self.goal_feat_map(self.goals_q[i:i+1], self.goals_v[i:i+1])
+                self.goal_feat[s] = self.goal_feat_map(self.goals_q[i:i+1], self.goals_v[i:i+1])
 
-                qpos[th] = self.starts_q[i]
-                qvel[th] = self.starts_v[i]
-                act[th] *= 0.
+                qpos[s] = self.starts_q[i]
+                qvel[s] = self.starts_v[i]
+                act[s] *= 0.
                 
-                cref = qpos[th:th+1, self.ctrl_indices]
+                cref = qpos[s:s+1, self.ctrl_indices]
                 if self.sim.ctrlRef_poly is not None:
-                    self.sim.ctrlRef_poly.reset(cref, th)
+                    self.sim.ctrlRef_poly.reset(cref, s)
                 if self.sim.ctrlRef_spline is not None:
                     self.sim.resetSplineRef(0., cref)
-                self.observation[th], _ = self.observation_fct(qpos[th:th+1], qvel[th:th+1], cref, self.goal_feat[th:th+1])
-                self.thread_needs_reset[th] = False
-                self.thread_time[th] = 0.
+                self.observation[s], _ = self.observation_fct(qpos[s:s+1], qvel[s:s+1], cref, self.goal_feat[s:s+1])
+                self.scene_needs_reset[s] = False
+                self.scene_time[s] = 0.
                 needs_set = True
                 
         if needs_set:
@@ -113,7 +108,7 @@ class MujocoGym(Env):
         if seed is not None:
             super().reset(seed=int(seed))
 
-        self.thread_needs_reset[:] = True
+        self.scene_needs_reset[:] = True
         
         return self.auto_reset()    
 
@@ -135,7 +130,7 @@ class MujocoGym(Env):
         # self.sim.resetSplineRef(ctrl_time=0.)
         cref = self.qpos[:, self.ctrl_indices]
         self.sim.ctrlRef.reset(cref, 0)
-        self.thread_time[0] = 0.
+        self.scene_time[0] = 0.
 
         if self.verbose>2:
             self.sim.C.view(self.verbose>3, f'gym START - t:{self.sim.ctrl_time:6.3f}')
@@ -146,8 +141,8 @@ class MujocoGym(Env):
 
     def step(self, action):
         if action.ndim==1:
-            action = action.reshape(self.num_threads, -1)
-        assert action.shape[0]==self.num_threads
+            action = action.reshape(self.num_scenes, -1)
+        assert action.shape[0]==self.num_scenes
         assert action.shape[1]==len(self.ctrl_indices)
 
         # set action
@@ -164,14 +159,14 @@ class MujocoGym(Env):
  
         # step
         self.sim.step(tau_step=self.cfg.tau_step)
-        self.thread_time += self.cfg.tau_step
+        self.scene_time += self.cfg.tau_step
   
         # get obs and truncation
         self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.sim.get_ctrlRef(), self.goal_feat)
         reward = self.reward_fct(self.observation, feat)
         terminated = self.is_goal(self.observation, feat)
-        truncated = (self.thread_time >= self.cfg.time_limit) # terminated and truncated difference is super important
-        self.thread_needs_reset = np.logical_or(terminated, truncated)
+        truncated = (self.scene_time >= self.cfg.time_limit) # terminated and truncated difference is super important
+        self.scene_needs_reset = np.logical_or(terminated, truncated)
 
         # if self.verbose>2:
         #     if terminated:
@@ -181,7 +176,7 @@ class MujocoGym(Env):
         #     # else:
         #     #     self.sim.C.view(False, f'GYM t:{self.sim.ctrl_time:6.3f} (reward: {reward})')
 
-        if self.num_threads==1: # for stable_baselines to work..
+        if self.num_scenes==1: # for stable_baselines to work..
             reward = reward.item()
         return self.observation, reward, terminated, truncated, {}
     
@@ -248,17 +243,17 @@ class MujocoGym(Env):
     @property
     def qpos(self) -> np.array:
         if self.qpos_offset is not None:
-            return (self.sim.data.qpos-self.qpos_offset).reshape(self.num_threads, -1)
+            return (self.sim.data.qpos-self.qpos_offset).reshape(self.num_scenes, -1)
         else:
-            return self.sim.data.qpos.reshape(self.num_threads, -1)
+            return self.sim.data.qpos.reshape(self.num_scenes, -1)
 
     @property
     def qvel(self) -> np.array:
-        return self.sim.data.qvel.reshape(self.num_threads, -1)
+        return self.sim.data.qvel.reshape(self.num_scenes, -1)
 
     @property
     def act(self) -> np.array:
-        return self.sim.data.actuator_force.reshape(self.num_threads, -1)
+        return self.sim.data.actuator_force.reshape(self.num_scenes, -1)
 
     def render(self):
         '''also part of the env.Gym'''
