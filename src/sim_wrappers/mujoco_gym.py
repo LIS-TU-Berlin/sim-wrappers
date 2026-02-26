@@ -26,7 +26,7 @@ class MujocoGym(Env):
     verbose = 0
     qpos_offset = None
 
-    def __init__(self, sim: MujocoSim, cfg: MujocoGymConfig, goal_feat_map = None, num_scenes=1):
+    def __init__(self, sim: MujocoSim, cfg: MujocoGymConfig, goal_feat_map = None, num_scenes=1, terminal_bounds=None):
         self.sim = sim
         x0 = self.sim.getState()
         if x0.time > 0.:
@@ -35,6 +35,7 @@ class MujocoGym(Env):
 
         self.cfg = cfg
         self.goal_feat_map = goal_feat_map
+        self.terminal_bounds = terminal_bounds
 
         self.num_scenes = num_scenes
         self.scene_needs_reset = np.ones((num_scenes), dtype=bool)
@@ -165,6 +166,8 @@ class MujocoGym(Env):
         self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.sim.get_ctrlRef(), self.goal_feat)
         reward = self.reward_fct(self.observation, feat)
         terminated = self.is_goal(self.observation, feat)
+        if self.terminal_bounds is not None:
+            terminated |= self.is_out_of_bound(self.qpos, self.qvel)
         truncated = (self.scene_time >= self.cfg.time_limit) # terminated and truncated difference is super important
         self.scene_needs_reset = np.logical_or(terminated, truncated)
 
@@ -195,6 +198,15 @@ class MujocoGym(Env):
         err = np.linalg.norm(feat-self.goal_feat, axis=1)
         # print('err', err)
         return (err <= self.cfg.goal_feat_eps)
+
+    def is_out_of_bound(self, qpos, qvel):
+        if self.terminal_bounds is None:
+            return False
+        assert self.terminal_bounds.shape[0]==2
+        assert self.terminal_bounds.shape[1]==qpos.size
+        l = np.any(qpos < self.terminal_bounds[0].reshape(qpos.shape), axis=1)
+        g = np.any(qpos > self.terminal_bounds[1].reshape(qpos.shape), axis=1)
+        return np.logical_or(l,g) 
 
     def reward_fct(self, obs, feat):
         return np.where(self.is_goal(obs, feat), 1., 0.)
@@ -229,7 +241,7 @@ class MujocoGym(Env):
             t += 1
             if self.verbose>1:
                 print("reward: ", reward)
-            if np.all(truncated): #terminated or 
+            if np.all(terminated or truncated):
                 break
 
         if self.verbose>0:

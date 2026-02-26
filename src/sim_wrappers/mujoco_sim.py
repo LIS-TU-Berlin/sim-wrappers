@@ -112,12 +112,12 @@ class MujocoSim:
         self.ctrlRef_poly = None
         self.ctrlRef_spline = None
 
+        print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} and {len(self.freeobjs)} free objects (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})") # ctrl_indices:{self.ctrl_indices}
+        
         assert self.data.qpos.size == self.C.getJointDimension()
         assert self.data.time == 0.
 
         self.pushConfigToSim()
-
-        print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} and {len(self.freeobjs)} free objects (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})") # ctrl_indices:{self.ctrl_indices}
 
     def __del__(self):
         if hasattr(self, "viewer") and self.viewer is not None:
