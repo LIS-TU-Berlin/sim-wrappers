@@ -22,34 +22,34 @@ class MjSimState:
         return np.concat((np.array([self.time]), self.qpos, self.qvel, self.act))
 
 class SecondOrderCtrlRef:
-    def __init__(self, t0, x0, v0, delta, tau):
+    def __init__(self, t0, x0, v0, action_delta, lmbda, xi=1.):
         self.t0 = t0
         self.x0 = x0.copy()
         self.v0 = v0.copy()
-        self.a  = (delta-tau*v0)/(tau*tau) #at time t=tau, f(t) = x0 + .5*tau*v0 + .5*delta
+        self.coeff  = (action_delta-2.*xi*lmbda*v0)/(2.*lmbda*lmbda) #see overleaf notes!
 
     def eval(self, t, single_th=-1):
         d = t - self.t0
         if single_th==-1:
             if isinstance(d, np.ndarray):
-                return (d*d).reshape(-1,1)*self.a + d.reshape(-1,1)*self.v0 + self.x0
+                return (d*d).reshape(-1,1)*self.coeff + d.reshape(-1,1)*self.v0 + self.x0
             else:
-                return self.a*(d*d) + self.v0*d + self.x0
+                return self.coeff*(d*d) + self.v0*d + self.x0
         else:
-            return self.a[single_th]*(d*d) + self.v0[single_th]*d + self.x0[single_th]
+            return self.coeff[single_th]*(d*d) + self.v0[single_th]*d + self.x0[single_th]
 
     def eval_vel(self, t):
         d = t - self.t0
-        return self.a*d + self.v0
+        return self.coeff*d + self.v0
 
     def reshape(self, num_threads):
-        self.a = self.a.reshape(num_threads, -1)
+        self.coeff = self.coeff.reshape(num_threads, -1)
         self.v0 = self.v0.reshape(num_threads, -1)
         self.x0 = self.x0.reshape(num_threads, -1)
 
     def reset(self, x0, th):
         assert self.x0.ndim==2
-        self.a[th] *= 0.
+        self.coeff[th] *= 0.
         self.v0[th] *= 0.
         self.x0[th] = x0
 

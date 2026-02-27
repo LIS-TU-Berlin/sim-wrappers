@@ -19,6 +19,7 @@ class MujocoGymConfig:
     obs_pos_scale = 1.
     obs_vel_scale = .05
     obs_referr_scale = 20.
+    bounds_margin = .01
 
 class MujocoGym(Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
@@ -166,9 +167,9 @@ class MujocoGym(Env):
         self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.sim.get_ctrlRef(), self.goal_feat)
         reward = self.reward_fct(self.observation, feat)
         terminated = self.is_goal(self.observation, feat)
+        truncated = (self.scene_time >= self.cfg.time_limit) # terminated and truncated difference is super important
         if self.terminal_bounds is not None:
             terminated |= self.is_out_of_bound(self.qpos, self.qvel)
-        truncated = (self.scene_time >= self.cfg.time_limit) # terminated and truncated difference is super important
         self.scene_needs_reset = np.logical_or(terminated, truncated)
 
         # if self.verbose>2:
@@ -204,8 +205,9 @@ class MujocoGym(Env):
             return False
         assert self.terminal_bounds.shape[0]==2
         assert self.terminal_bounds.shape[1]==qpos.size
-        l = np.any(qpos < self.terminal_bounds[0].reshape(qpos.shape), axis=1)
-        g = np.any(qpos > self.terminal_bounds[1].reshape(qpos.shape), axis=1)
+        assert not np.any(self.terminal_bounds[1]<=self.terminal_bounds[0]), f"bounds (joint) not proper: {self.terminal_bounds}"
+        l = np.any(qpos < self.terminal_bounds[0].reshape(qpos.shape) - self.cfg.bounds_margin, axis=1)
+        g = np.any(qpos > self.terminal_bounds[1].reshape(qpos.shape) + self.cfg.bounds_margin, axis=1)
         return np.logical_or(l,g) 
 
     def reward_fct(self, obs, feat):
