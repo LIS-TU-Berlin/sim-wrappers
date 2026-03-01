@@ -20,6 +20,8 @@ class MujocoGymConfig:
     obs_vel_scale = .05
     obs_referr_scale = 20.
     bounds_margin = .01
+    eff_action = None
+    eff_observation = None
 
 class MujocoGym(Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
@@ -35,9 +37,13 @@ class MujocoGym(Env):
             x0.time = 0.
 
         self.cfg = cfg
+        if self.cfg.eff_action=='none':
+            self.cfg.eff_action=None
+        if self.cfg.eff_observation=='none':
+            self.cfg.eff_observation=None
+
         self.goal_feat_map = goal_feat_map
         self.terminal_bounds = terminal_bounds
-
         self.num_scenes = num_scenes
         self.scene_needs_reset = np.ones((num_scenes), dtype=bool)
         self.scene_time = np.zeros((num_scenes))
@@ -54,10 +60,14 @@ class MujocoGym(Env):
 
         # define the action space
         self.action_scale = self.cfg.action_scale_sqrttau*math.sqrt(self.cfg.tau_step)
-        action_dim = self.sim.ctrl_dim // num_scenes
+        if self.cfg.eff_action is None:
+            action_dim = self.sim.ctrl_dim // num_scenes
+        else:
+            action_dim = 6
+            self.q_home = self.qpos[0, :len(self.ctrl_indices)]
         self.action_space = spaces.Box(-1., +1., shape=(num_scenes, action_dim), dtype=np.float32)
 
-        print(f"-- initialized MjGym with observation dim {self.observation.shape} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{feat.size}), action dim {action_dim}, tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
+        print(f"-- initialized MjGym with observation dim {self.observation.shape} (qdim:{x0.qpos.size}-4+qvel:{x0.qvel.size}+act:{x0.act.size}+goal:{feat.size}), action dim {action_dim} (pose_action={self.cfg.eff_action}), tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
 
     def __del__(self):
         del self.sim
@@ -71,7 +81,6 @@ class MujocoGym(Env):
 
     def auto_reset(self):
         assert self.num_scenes>0
-        # x = self.sim.getState()
         qpos, qvel, act = self.qpos, self.qvel, self.act
         needs_set = False
         
@@ -89,13 +98,12 @@ class MujocoGym(Env):
                     self.sim.ctrlRef_poly.reset(cref, s)
                 if self.sim.ctrlRef_spline is not None:
                     self.sim.resetSplineRef(0., cref)
-                self.observation[s], _ = self.observation_fct(qpos[s:s+1], qvel[s:s+1], cref, self.goal_feat[s:s+1])
+                self.observation[s], _ = self.observation_fct(qpos[s:s+1], qvel[s:s+1], cref, self.goal_feat[s:s+1], single_scene=s)
                 self.scene_needs_reset[s] = False
                 self.scene_time[s] = 0.
                 needs_set = True
                 
         if needs_set:
-            # self.sim.setState(x)
             if self.qpos_offset is None:
                 self.sim.data.qpos = qpos.reshape(-1)
             else:
@@ -145,7 +153,26 @@ class MujocoGym(Env):
         if action.ndim==1:
             action = action.reshape(self.num_scenes, -1)
         assert action.shape[0]==self.num_scenes
-        assert action.shape[1]==len(self.ctrl_indices)
+        if self.cfg.eff_action is None:
+            assert action.shape[1]==len(self.ctrl_indices)
+        else:
+            assert action.shape[1]==6
+
+        # is a endeffector delta action?
+        if self.cfg.eff_action is not None:
+            ns = self.num_scenes
+            nc = len(self.ctrl_indices)
+            pose_action = action
+            action = np.zeros((ns, nc))
+            for s in range(ns):
+                Jpos, Jang = self.sim.get_Jacobian(f'{s}_{self.cfg.eff_action}')
+                J = np.vstack((Jpos, Jang))
+                J = J.reshape(6, ns, -1)
+                J = J[:,s,:nc]
+                Jinv = J.T @ np.linalg.pinv(J@J.T+1e-3*np.eye(J.shape[0]))
+                action[s,:] = Jinv @ pose_action[s,:]
+                if self.q_home is not None:
+                    action[s,:] += 0.1*(np.eye(nc) - Jinv@J) @ (self.q_home-self.qpos[s, :nc])
 
         # set action
         action_delta = self.action_scale * action
@@ -184,16 +211,28 @@ class MujocoGym(Env):
             reward = reward.item()
         return self.observation, reward, terminated, truncated, {}
     
-    def observation_fct(self, qpos, qvel, cref, goal_feat):
+    def observation_fct(self, qpos, qvel, cref, goal_feat, single_scene=-1):
         o_pos = self.cfg.obs_pos_scale * qpos[:, :-4]
         o_vel = self.cfg.obs_vel_scale * qvel
         o_err = self.cfg.obs_referr_scale * (cref - qpos[:, self.ctrl_indices]) #self.sim.ctrlRef.eval(self.sim.ctrl_time)
         obs = np.hstack((o_pos, o_vel, o_err))
+        if self.cfg.eff_observation is not None:
+            o_eff = self.cfg.obs_pos_scale * self.get_effpos_observation(single_scene)
+            obs = np.hstack((obs, o_eff))
         feat = self.goal_feat_map(qpos, qvel)
         o_goal = self.cfg.obs_pos_scale * (goal_feat - feat)
         obs = np.hstack((obs, o_goal))
         obs = np.clip(obs, -2., 2.)
         return obs, feat
+
+    def get_effpos_observation(self, single_scene):
+        if single_scene>=0:
+            return self.sim.get_position(f'{single_scene}_{self.cfg.eff_observation}').reshape(1,3)
+        
+        o_eff = np.empty((self.num_scenes, 3))
+        for s in range(self.num_scenes):
+            o_eff[s] = self.sim.get_position(f'{s}_{self.cfg.eff_observation}')
+        return o_eff
 
     def is_goal(self, obs, feat):
         err = np.linalg.norm(feat-self.goal_feat, axis=1)
@@ -243,7 +282,7 @@ class MujocoGym(Env):
             t += 1
             if self.verbose>1:
                 print("reward: ", reward)
-            if np.all(terminated or truncated):
+            if np.any(np.logical_or(terminated, truncated)):
                 break
 
         if self.verbose>0:

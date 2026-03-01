@@ -136,6 +136,15 @@ class MujocoSim:
         """[interna] set selt.C state equal to mujoco state"""
         self.C.setJointState(self.data.qpos)
 
+    def get_ctrlRef(self):
+        if self.ctrlRef_poly is not None:
+            cref = self.ctrlRef_poly.eval(self.ctrl_time)
+        elif self.ctrlRef_spline is not None:
+            cref = self.ctrlRef_spline.eval3(self.ctrl_time)[0]
+        else:
+            raise Exception('you need to set a ctrl reference')
+        return cref
+
     def multi_sim_steps(self, steps: int) -> None:
         view_steps = math.ceil(0.02 / self.tau_sim * self.view_speed)
         for k in range(steps):
@@ -160,16 +169,9 @@ class MujocoSim:
                 if self.save_images:
                     self.saved_images.append(self.C.get_viewer().getRgb())
                 time.sleep(view_steps * self.tau_sim / self.view_speed)
-        self.pullConfigFromSim()
 
-    def get_ctrlRef(self):
-        if self.ctrlRef_poly is not None:
-            cref = self.ctrlRef_poly.eval(self.ctrl_time)
-        elif self.ctrlRef_spline is not None:
-            cref = self.ctrlRef_spline.eval3(self.ctrl_time)[0]
-        else:
-            raise Exception('you need to set a ctrl reference')
-        return cref
+        mujoco.mj_forward(self.model, self.data)
+        self.pullConfigFromSim()
 
     def step(self, tau_step: float) -> None:
         """[core] step the physics engine for a given time, usually making multiple small (tau_sim) steps"""
@@ -233,6 +235,28 @@ class MujocoSim:
         current_vel = self.data.qvel[: self.ctrl_dim]
         current_ref = self.ctrlRef_poly.eval(self.ctrl_time)
         self.ctrlRef_poly = SecondOrderCtrlRef(self.ctrl_time, current_ref, current_vel, delta, time_horizon)
+
+    def get_Jacobian(self, frame_name):
+        body_id = mujoco.mj_name2id(self.model, 1, frame_name)
+        assert body_id>=0, f'frame name {frame_name} is not a mj body'
+        pos = self.data.xpos[body_id]
+        Jpos = np.empty((3, self.model.nv))
+        Jang = np.empty((3, self.model.nv))
+        mujoco.mj_jac(self.model, self.data, Jpos, Jang, pos, body_id)
+    
+        if False: #test
+            self.pullConfigFromSim()
+            y, J = self.C.eval(ry.FS.position, [frame_name])
+            print(np.linalg.norm(pos-y))
+            print(Jpos, '\n', J)
+
+        return Jpos, Jang
+
+    def get_position(self, frame_name):
+        body_id = mujoco.mj_name2id(self.model, 1, frame_name)
+        assert body_id>=0, f'frame name {frame_name} is not a mj body'
+        pos = self.data.xpos[body_id]
+        return pos
 
     @property
     def qpos_dim(self) -> int:
