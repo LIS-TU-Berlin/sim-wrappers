@@ -21,7 +21,7 @@ class MujocoGymConfig:
     obs_referr_scale = 20.
     bounds_margin = .01
     eff_action = None
-    eff_observation = None
+    observation_points = None
 
 class MujocoGym(Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
@@ -39,8 +39,8 @@ class MujocoGym(Env):
         self.cfg = cfg
         if self.cfg.eff_action=='none':
             self.cfg.eff_action=None
-        if self.cfg.eff_observation=='none':
-            self.cfg.eff_observation=None
+        if self.cfg.observation_points==[]:
+            self.cfg.observation_points=None
 
         self.goal_feat_map = goal_feat_map
         self.terminal_bounds = terminal_bounds
@@ -98,7 +98,7 @@ class MujocoGym(Env):
                     self.sim.ctrlRef_poly.reset(cref, s)
                 if self.sim.ctrlRef_spline is not None:
                     self.sim.resetSplineRef(0., cref)
-                self.observation[s], _ = self.observation_fct(qpos[s:s+1], qvel[s:s+1], cref, self.goal_feat[s:s+1], single_scene=s)
+                self.observation[s], _ = self.observation_fct(qpos[s:s+1], qvel[s:s+1], cref, self.goal_feat[s:s+1], selected_scenes=[s])
                 self.scene_needs_reset[s] = False
                 self.scene_time[s] = 0.
                 needs_set = True
@@ -211,13 +211,13 @@ class MujocoGym(Env):
             reward = reward.item()
         return self.observation, reward, terminated, truncated, {}
     
-    def observation_fct(self, qpos, qvel, cref, goal_feat, single_scene=-1):
+    def observation_fct(self, qpos, qvel, cref, goal_feat, selected_scenes=None):
         o_pos = self.cfg.obs_pos_scale * qpos[:, :-4]
         o_vel = self.cfg.obs_vel_scale * qvel
         o_err = self.cfg.obs_referr_scale * (cref - qpos[:, self.ctrl_indices]) #self.sim.ctrlRef.eval(self.sim.ctrl_time)
         obs = np.hstack((o_pos, o_vel, o_err))
-        if self.cfg.eff_observation is not None:
-            o_eff = self.cfg.obs_pos_scale * self.get_effpos_observation(single_scene)
+        if self.cfg.observation_points is not None:
+            o_eff = self.cfg.obs_pos_scale * self.get_effpos_observation(selected_scenes)
             obs = np.hstack((obs, o_eff))
         feat = self.goal_feat_map(qpos, qvel)
         o_goal = self.cfg.obs_pos_scale * (goal_feat - feat)
@@ -225,14 +225,14 @@ class MujocoGym(Env):
         obs = np.clip(obs, -2., 2.)
         return obs, feat
 
-    def get_effpos_observation(self, single_scene):
-        if single_scene>=0:
-            return self.sim.get_position(f'{single_scene}_{self.cfg.eff_observation}').reshape(1,3)
-        
-        o_eff = np.empty((self.num_scenes, 3))
-        for s in range(self.num_scenes):
-            o_eff[s] = self.sim.get_position(f'{s}_{self.cfg.eff_observation}')
-        return o_eff
+    def get_effpos_observation(self, scenes=None):
+        if scenes is None:
+            scenes = range(self.num_scenes)
+        o_eff = np.empty((len(scenes), len(self.cfg.observation_points), 3))
+        for i,s in enumerate(scenes):
+            for j,name in enumerate(self.cfg.observation_points):
+                o_eff[i,j] = self.sim.get_position(f'{s}_{name}')
+        return o_eff.reshape(len(scenes), -1)
 
     def is_goal(self, obs, feat):
         err = np.linalg.norm(feat-self.goal_feat, axis=1)
