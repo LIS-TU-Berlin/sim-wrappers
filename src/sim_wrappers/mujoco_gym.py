@@ -196,7 +196,7 @@ class MujocoGym(Env):
         terminated = self.is_goal(self.observation, feat)
         truncated = (self.scene_time >= self.cfg.time_limit) # terminated and truncated difference is super important
         if self.terminal_bounds is not None:
-            terminated |= self.is_out_of_bound(self.qpos, self.qvel)
+            truncated |= self.is_out_of_bound(self.qpos, self.qvel)
         self.scene_needs_reset = np.logical_or(terminated, truncated)
 
         # if self.verbose>2:
