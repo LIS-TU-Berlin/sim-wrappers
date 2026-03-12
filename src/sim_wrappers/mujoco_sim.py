@@ -21,43 +21,44 @@ class MjSimState:
     def as_vector(self):
         return np.concat((np.array([self.time]), self.qpos, self.qvel, self.act))
 
-class SecondOrderCtrlRef:
+class SecondOrderPolyRef:
     def __init__(self, t0, x0, v0, action_delta, lmbda, xi=1.):
         self.t0 = t0
         self.x0 = x0.copy()
         self.v0 = v0.copy()
         self.coeff  = (action_delta-2.*xi*lmbda*v0)/(2.*lmbda*lmbda) #see overleaf notes!
 
-    def eval(self, t, single_th=-1):
+    def eval(self, t, single_row=-1):
         d = t - self.t0
-        if single_th==-1:
-            if isinstance(d, np.ndarray):
+        if single_row==-1:
+            if isinstance(d, np.ndarray): #t may be scalar or vector
                 return (d*d).reshape(-1,1)*self.coeff + d.reshape(-1,1)*self.v0 + self.x0
             else:
                 return self.coeff*(d*d) + self.v0*d + self.x0
         else:
-            return self.coeff[single_th]*(d*d) + self.v0[single_th]*d + self.x0[single_th]
+            return self.coeff[single_row]*(d*d) + self.v0[single_row]*d + self.x0[single_row]
 
     def eval_vel(self, t):
         d = t - self.t0
         return self.coeff*d + self.v0
 
-    def reshape(self, num_threads):
-        self.coeff = self.coeff.reshape(num_threads, -1)
-        self.v0 = self.v0.reshape(num_threads, -1)
-        self.x0 = self.x0.reshape(num_threads, -1)
+    def reshape(self, num_rows):
+        self.coeff = self.coeff.reshape(num_rows, -1)
+        self.v0 = self.v0.reshape(num_rows, -1)
+        self.x0 = self.x0.reshape(num_rows, -1)
 
-    def reset(self, x0, th):
+    def reset(self, x0, row):
         assert self.x0.ndim==2
-        self.coeff[th] *= 0.
-        self.v0[th] *= 0.
-        self.x0[th] = x0
+        self.coeff[row] *= 0.
+        self.v0[row] *= 0.
+        self.x0[row] = x0
 
 class MujocoSim:
     mj_steps = 0
     ctrl_time = 0.
     ctrl_costs = 0.
 
+    # for inspection & rendering only
     view_speed = -1.
     save_qpos = -1
     saved_qpos = []
@@ -66,7 +67,7 @@ class MujocoSim:
 
     def __init__(
         self,
-        xml_path: str,
+        xml_path: str, # I would prefer passing a string instead of file
         C: ry.Config,
         use_mj_viewer: bool = True,
         tau_sim: float = 1e-3
@@ -95,12 +96,6 @@ class MujocoSim:
             self.viewer = None
 
         self.C = C
-        self.freeobjs = []
-        for f in C.getFrames():
-            if f.getParent() == None or (f.getJointType() == ry.JT.free):
-                # print(f.name)
-                if "mass" in f.asDict():
-                    self.freeobjs.append(f)
 
         self.ctrl_indices = []
         for i in range(self.ctrl_dim):
@@ -112,7 +107,7 @@ class MujocoSim:
         self.ctrlRef_poly = None
         self.ctrlRef_spline = None
 
-        print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} and {len(self.freeobjs)} free objects (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})") # ctrl_indices:{self.ctrl_indices}
+        print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})") # ctrl_indices:{self.ctrl_indices}
         
         assert self.data.qpos.size == self.C.getJointDimension()
         assert self.data.time == 0.
@@ -145,9 +140,9 @@ class MujocoSim:
             raise Exception('you need to set a ctrl reference')
         return cref
 
-    def multi_sim_steps(self, steps: int) -> None:
+    def multi_step(self, num_steps: int) -> None:
         view_steps = math.ceil(0.02 / self.tau_sim * self.view_speed)
-        for k in range(steps):
+        for k in range(num_steps):
             cref = self.get_ctrlRef()
             self.data.ctrl = cref.reshape(-1)
 
@@ -177,7 +172,7 @@ class MujocoSim:
         """[core] step the physics engine for a given time, usually making multiple small (tau_sim) steps"""
         sim_steps = round(tau_step / self.tau_sim)
         assert math.isclose(tau_step, sim_steps * self.tau_sim), "tau_step needs to be a multiple of tau_sim"
-        self.multi_sim_steps(sim_steps)
+        self.multi_step(sim_steps)
 
     def getState(self) -> MjSimState:
         """[core] get a state struct that allows exact reset"""
@@ -208,7 +203,7 @@ class MujocoSim:
     def resetPolyRef(self, ctrl_time: float = 0.) -> None:
         cref = self.data.qpos[self.ctrl_indices]
         self.ctrlRef_spline = None
-        self.ctrlRef_poly = SecondOrderCtrlRef(ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 1.)
+        self.ctrlRef_poly = SecondOrderPolyRef(ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 1.)
         self.ctrl_time = ctrl_time
 
     def resetSplineRef(self, ctrl_time: float = 0., const_ref=None) -> None:
@@ -232,9 +227,6 @@ class MujocoSim:
 
     def updatePolyRef(self, delta, time_horizon):
         raise NotImplementedError()
-        current_vel = self.data.qvel[: self.ctrl_dim]
-        current_ref = self.ctrlRef_poly.eval(self.ctrl_time)
-        self.ctrlRef_poly = SecondOrderCtrlRef(self.ctrl_time, current_ref, current_vel, delta, time_horizon)
 
     def get_Jacobian(self, frame_name):
         body_id = mujoco.mj_name2id(self.model, 1, frame_name)
@@ -257,6 +249,15 @@ class MujocoSim:
         assert body_id>=0, f'frame name {frame_name} is not a mj body'
         pos = self.data.xpos[body_id]
         return pos
+
+    def get_free_objects(self):
+        freeobjs = []
+        for f in self.C.getFrames():
+            if f.getParent() == None or (f.getJointType() == ry.JT.free):
+                # print(f.name)
+                if "mass" in f.asDict():
+                    freeobjs.append(f)
+        return freeobjs
 
     @property
     def qpos_dim(self) -> int:
