@@ -62,14 +62,23 @@ class MujocoGym(Env):
             self.q_home = self.qpos[:, self.ctrl_indices]
         self.action_space = spaces.Box(-1., +1., shape=(num_scenes, action_dim), dtype=np.float32)
 
+        # a counter to loop through provided starts/goals
+        self.starts_goals_counter = 0
+        
         print(f"-- initialized MjGym with observation dim {self.observation.shape} (qdim:{sim.qpos_dim}-4+qvel:{sim.qvel_dim}+ctrl:{sim.ctrl_dim}+goal:{feat.size}), action dim {action_dim} (pose_action={self.cfg.eff_action}), tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
 
     def set_starts_goals(self, starts_q: np.array, goals_q: np.array):
         assert starts_q.shape[0]==goals_q.shape[0]
+        self.starts_goals_counter = 0
         self.starts_q = np.atleast_2d(starts_q)
         self.starts_v = np.zeros((starts_q.shape[0], self.sim.qvel_dim//self.num_scenes))
         self.goals_q = np.atleast_2d(goals_q)
         self.goals_v = np.zeros((goals_q.shape[0], self.sim.qvel_dim//self.num_scenes))
+
+    def next_starts_goals_counter(self):
+        i = self.starts_goals_counter % self.starts_q.shape[0]
+        self.starts_goals_counter += 1
+        return i
 
     def auto_reset(self):
         assert self.num_scenes>0
@@ -78,9 +87,10 @@ class MujocoGym(Env):
         
         for s in range(self.num_scenes):
             if self.scene_needs_reset[s]:
-                i = np.random.randint(0, self.starts_q.shape[0])
-                self.goal_feat[s] = self.goal_feat_map(self.goals_q[i:i+1], self.goals_v[i:i+1])
+                i = self.next_starts_goals_counter()
+                # i = np.random.randint(0, self.starts_q.shape[0])
 
+                self.goal_feat[s] = self.goal_feat_map(self.goals_q[i:i+1], self.goals_v[i:i+1])
                 qpos[s] = self.starts_q[i]
                 qvel[s] = self.starts_v[i]
                 act[s] *= 0.
