@@ -28,7 +28,6 @@ class MujocoGym(Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
     render_mode = 'human'
     verbose = 0
-    qpos_offset = None #an offset before observations and bounds are computed, esp. for grid scenes where the offset subtracts the origin from the free joints
 
     def __init__(self, sim: MujocoSim, cfg: MujocoGymCfg, goal_feat_map = None, num_scenes=1, terminal_bounds=None):
         self.sim = sim
@@ -104,10 +103,7 @@ class MujocoGym(Env):
                 needs_set = True
                 
         if needs_set:
-            if self.qpos_offset is None:
-                self.sim.data.qpos = qpos.reshape(-1)
-            else:
-                self.sim.data.qpos = qpos.reshape(-1) + self.qpos_offset
+            self.sim.data.qpos = qpos.reshape(-1) + self.sim.qpos_offset
             self.sim.data.qvel = qvel.reshape(-1)
             self.sim.data.actuator_force = act.reshape(-1)
             mujoco.mj_forward(self.sim.model, self.sim.data)
@@ -279,10 +275,7 @@ class MujocoGym(Env):
 
     @property
     def qpos(self) -> np.array:
-        if self.qpos_offset is not None:
-            return (self.sim.data.qpos-self.qpos_offset).reshape(self.num_scenes, -1)
-        else:
-            return self.sim.data.qpos.reshape(self.num_scenes, -1)
+        return (self.sim.data.qpos-self.sim.qpos_offset).reshape(self.num_scenes, -1)
 
     @property
     def qvel(self) -> np.array:

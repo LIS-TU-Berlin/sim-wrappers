@@ -25,7 +25,6 @@ class MujocoSim:
     mj_steps = 0
     ctrl_time = 0.
     ctrl_costs = 0.
-    qpos_offset = None #an offset before set/getState
 
     # for inspection & rendering only
     view_speed = -1.
@@ -50,6 +49,7 @@ class MujocoSim:
         self.model.opt.timestep = self.tau_sim
         self.use_mj_viewer = use_mj_viewer
 
+        # MOSTLY OBSOLETE, use sync with ry instead
         if use_mj_viewer:
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
             cam_pose = C.get_viewer().getCamera_pose()
@@ -65,6 +65,7 @@ class MujocoSim:
 
         self.C = C
 
+        # determine which qpos indices are controlled (actuated) joints
         self.ctrl_indices = []
         for i in range(self.ctrl_dim):
             id = self.model.actuator(i).trnid[0]
@@ -76,7 +77,23 @@ class MujocoSim:
         self.ctrl_bufferPtr = 0
         self.ctrlRef_spline = None
 
-        print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})") # ctrl_indices:{self.ctrl_indices}
+        # determine free objects and their non-zero offset in qpos
+        self.qpos_offset = np.zeros((self.data.qpos.size))
+        self.freeobjs = []
+        for f in self.C.getFrames():
+            parent = f.getParent()
+            if parent == None or (f.getJointType() == ry.JT.free):
+                if "mass" in f.asDict():
+                    self.freeobjs.append(f)
+                    if parent is not None:
+                        assert parent.getParent() is None, "free joints need to have a root parent!"
+                        offset = parent.getPosition()
+                        quat = parent.getQuaternion()
+                        assert np.linalg.norm(quat - np.array([1,0,0,0]))<1e-10
+                        qid = f.getJointQIndex()
+                        self.qpos_offset[qid:qid+3] = offset
+
+        print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim}) with {len(self.freeobjs)} free objects") # ctrl_indices:{self.ctrl_indices}
         
         assert self.data.qpos.size == self.C.getJointDimension()
         assert self.data.time == 0.
@@ -89,7 +106,7 @@ class MujocoSim:
 
     def pushConfigToSim(self):
         """[internal] (re)set the mujoco state to be equal to the self.C state"""
-        self.data.qpos = self.C.getJointState()
+        self.data.qpos = self.C.getJointState() + self.qpos_offset
 
         mujoco.mj_forward(self.model, self.data)
 
@@ -98,7 +115,7 @@ class MujocoSim:
 
     def pullConfigFromSim(self):
         """[interna] set selt.C state equal to mujoco state"""
-        self.C.setJointState(self.data.qpos)
+        self.C.setJointState(self.data.qpos - self.qpos_offset)
 
     def get_ctrlRef(self):
         if self.ctrlRef_spline is not None:
@@ -150,7 +167,7 @@ class MujocoSim:
         """[core] get a state struct that allows exact reset"""
         return MjSimState(
             time=self.data.time,
-            qpos=self.qpos_minus_offset.copy(),
+            qpos=self.data.qpos - self.qpos_offset,
             qvel=self.data.qvel.copy(),
             act=self.data.actuator_force.copy(),
         )
@@ -222,14 +239,7 @@ class MujocoSim:
                 if "mass" in f.asDict():
                     freeobjs.append(f)
         return freeobjs
-
-    @property
-    def qpos_minus_offset(self) -> np.array:
-        if self.qpos_offset is not None:
-            return self.data.qpos-self.qpos_offset
-        else:
-            return self.data.qpos
-        
+       
     @property
     def qpos_dim(self) -> int:
         return self.data.qpos.size
