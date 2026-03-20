@@ -1,6 +1,7 @@
 # initial version from e05-RobotGym.py (robot learning course)
 
 from .mujoco_sim import *
+from .poly_ref import SecondOrderPolyRef
 from gymnasium import Env, spaces
 import numpy as np
 from dataclasses import dataclass
@@ -44,13 +45,11 @@ class MujocoGym(Env):
         self.scene_needs_reset = np.ones((num_scenes), dtype=bool)
         self.scene_time = np.zeros((num_scenes))
         self.ctrl_indices = self.sim.ctrl_indices.reshape(num_scenes, -1)[0]
+        self.ctrl_current = self.qpos[:, self.ctrl_indices].copy()
 
         # to get the first observatin, we need to setup a ctrlRef, get a goal feature, then query an observation
-        cref = self.qpos[:, self.ctrl_indices]
-        self.sim.ctrlRef_spline = None
-        self.sim.ctrlRef_poly = SecondOrderPolyRef(self.sim.ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 2.*self.cfg.tau_step)
         self.goal_feat = self.goal_feat_map(self.qpos, self.qvel)
-        self.observation, feat = self.observation_fct(self.qpos, self.qvel, cref, self.goal_feat)
+        self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.ctrl_current, self.goal_feat)
         self.observation_space = spaces.Box(-2., +2., shape=self.observation.shape, dtype=np.float32)
 
         # define the action space
@@ -96,11 +95,7 @@ class MujocoGym(Env):
                 act[s] *= 0.
                 
                 cref = qpos[s:s+1, self.ctrl_indices]
-                if self.sim.ctrlRef_poly is not None:
-                    self.sim.ctrlRef_poly.reset(cref, row=s)
-                if self.sim.ctrlRef_spline is not None:
-                    assert self.num_scenes==1, 'updating only some row of a B-spline ref is not implemented yet'
-                    self.sim.resetSplineRef(0., cref)
+                self.ctrl_current[s] = cref
                 
                 self.observation[s], _ = self.observation_fct(qpos[s:s+1], qvel[s:s+1], cref, self.goal_feat[s:s+1], selected_scenes=[s])
 
@@ -143,24 +138,20 @@ class MujocoGym(Env):
 
         # set action
         action_delta = self.action_scale * action
-        if self.sim.ctrlRef_poly is not None:
-            current_ref = self.sim.ctrlRef_poly.eval(self.sim.ctrl_time)
-            current_vel = self.qvel[:, self.ctrl_indices]
-            self.sim.ctrlRef_poly = SecondOrderPolyRef(self.sim.ctrl_time, current_ref, current_vel, action_delta, 2.*self.cfg.tau_step)
-        elif self.sim.ctrlRef_spline is not None:
-            # current_pos = self.sim.spline_ref.eval3(self.sim.ctrl_time)[0] # relativ to current ref
-            current_pos = self.qpos[:, self.ctrl_indices]
-            target = action_delta + current_pos
-            self.sim.updateSplineRef(target, np.array([2.*self.cfg.tau_step]), append=False)
-        else:
-            raise Exception('you need to set a ctrl reference')
+        current_vel = self.qvel[:, self.ctrl_indices]
+        tmp = SecondOrderPolyRef(self.sim.ctrl_time, self.ctrl_current, current_vel, action_delta, 2.*self.cfg.tau_step)
+        self.sim.ctrl_buffer = tmp.sample_buffer(self.sim.ctrl_time,
+                                                    self.sim.ctrl_time+self.cfg.tau_step,
+                                                    self.sim.tau_sim)
+        self.sim.ctrl_bufferPtr = 0
 
         # step
         self.sim.step(tau_step=self.cfg.tau_step)
         self.scene_time += self.cfg.tau_step
+        self.ctrl_current = self.sim.ctrl_buffer[self.sim.ctrl_bufferPtr]
   
         # get obs and truncation
-        self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.sim.get_ctrlRef(), self.goal_feat)
+        self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.ctrl_current, self.goal_feat)
         reward = self.reward_fct(self.observation, feat)
         terminated = self.is_goal(self.observation, feat)
         truncated = (self.scene_time >= self.cfg.time_limit) # terminated and truncated difference is super important

@@ -21,42 +21,11 @@ class MjSimState:
     def as_vector(self):
         return np.concat((np.array([self.time]), self.qpos, self.qvel, self.act))
 
-class SecondOrderPolyRef:
-    def __init__(self, t0, x0, v0, action_delta, lmbda, xi=1.):
-        self.t0 = t0
-        self.x0 = x0.copy()
-        self.v0 = v0.copy()
-        self.coeff  = (action_delta-2.*xi*lmbda*v0)/(2.*lmbda*lmbda) #see overleaf notes!
-
-    def eval(self, t, single_row=-1):
-        d = t - self.t0
-        if single_row==-1:
-            if isinstance(d, np.ndarray): #t may be scalar or vector
-                return (d*d).reshape(-1,1)*self.coeff + d.reshape(-1,1)*self.v0 + self.x0
-            else:
-                return self.coeff*(d*d) + self.v0*d + self.x0
-        else:
-            return self.coeff[single_row]*(d*d) + self.v0[single_row]*d + self.x0[single_row]
-
-    def eval_vel(self, t):
-        d = t - self.t0
-        return self.coeff*d + self.v0
-
-    def reshape(self, num_rows):
-        self.coeff = self.coeff.reshape(num_rows, -1)
-        self.v0 = self.v0.reshape(num_rows, -1)
-        self.x0 = self.x0.reshape(num_rows, -1)
-
-    def reset(self, x0, row):
-        assert self.x0.ndim==2
-        self.coeff[row] *= 0.
-        self.v0[row] *= 0.
-        self.x0[row] = x0
-
 class MujocoSim:
     mj_steps = 0
     ctrl_time = 0.
     ctrl_costs = 0.
+    qpos_offset = None #an offset before set/getState
 
     # for inspection & rendering only
     view_speed = -1.
@@ -67,7 +36,7 @@ class MujocoSim:
 
     def __init__(
         self,
-        xml_path: str, # I would prefer passing a string instead of file
+        xml_description: str,
         C: ry.Config,
         use_mj_viewer: bool = True,
         tau_sim: float = 1e-3
@@ -75,12 +44,11 @@ class MujocoSim:
         """
         Basic simulation class that wraps a mujoco simulator.
         """
-        self.model = mujoco.MjModel.from_xml_path(xml_path)
+        self.model = mujoco.MjModel.from_xml_string(xml_description)
         self.data = mujoco.MjData(self.model)
         self.tau_sim = tau_sim
         self.model.opt.timestep = self.tau_sim
         self.use_mj_viewer = use_mj_viewer
-        self.xml_file = xml_path
 
         if use_mj_viewer:
             self.viewer = mujoco.viewer.launch_passive(self.model, self.data)
@@ -104,7 +72,8 @@ class MujocoSim:
             self.ctrl_indices.append(int(qid[0]))
         self.ctrl_indices = np.array(self.ctrl_indices, dtype='int32')
 
-        self.ctrlRef_poly = None
+        self.ctrl_buffer = None
+        self.ctrl_bufferPtr = 0
         self.ctrlRef_spline = None
 
         print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim})") # ctrl_indices:{self.ctrl_indices}
@@ -132,9 +101,7 @@ class MujocoSim:
         self.C.setJointState(self.data.qpos)
 
     def get_ctrlRef(self):
-        if self.ctrlRef_poly is not None:
-            cref = self.ctrlRef_poly.eval(self.ctrl_time)
-        elif self.ctrlRef_spline is not None:
+        if self.ctrlRef_spline is not None:
             cref = self.ctrlRef_spline.eval3(self.ctrl_time)[0]
         else:
             raise Exception('you need to set a ctrl reference')
@@ -143,7 +110,12 @@ class MujocoSim:
     def multi_step(self, num_steps: int) -> None:
         view_steps = math.ceil(0.02 / self.tau_sim * self.view_speed)
         for k in range(num_steps):
-            cref = self.get_ctrlRef()
+            assert self.ctrl_buffer is not None
+            assert self.ctrl_buffer.shape[0]>self.ctrl_bufferPtr , 'ctrlRef buffer too small'
+            cref = self.ctrl_buffer[self.ctrl_bufferPtr]
+            self.ctrl_bufferPtr += 1
+
+            # cref = self.get_ctrlRef()
             self.data.ctrl = cref.reshape(-1)
 
             mujoco.mj_step(self.model, self.data)
@@ -178,7 +150,7 @@ class MujocoSim:
         """[core] get a state struct that allows exact reset"""
         return MjSimState(
             time=self.data.time,
-            qpos=self.data.qpos.copy(),
+            qpos=self.qpos_minus_offset.copy(),
             qvel=self.data.qvel.copy(),
             act=self.data.actuator_force.copy(),
         )
@@ -186,7 +158,10 @@ class MujocoSim:
     def setState(self, state: MjSimState) -> None:
         """[core] set the state"""
         self.data.time = state.time
-        self.data.qpos[:] = state.qpos
+        if self.qpos_offset is None:
+            self.data.qpos[:] = state.qpos
+        else:
+            self.data.qpos[:] = state.qpos + self.qpos_offset
         self.data.qvel[:] = state.qvel
         self.data.actuator_force[:] = state.act
         mujoco.mj_forward(self.model, self.data)
@@ -200,15 +175,8 @@ class MujocoSim:
         assert s.size==1+nq+nv+self.ctrl_dim, "wrong size"
         return MjSimState(s[0], s[1:1+nq], s[1+nq:1+nq+nv], s[1+nq+nv:])
 
-    def resetPolyRef(self, ctrl_time: float = 0.) -> None:
-        cref = self.data.qpos[self.ctrl_indices]
-        self.ctrlRef_spline = None
-        self.ctrlRef_poly = SecondOrderPolyRef(ctrl_time, cref, np.zeros(cref.shape), np.zeros(cref.shape), 1.)
-        self.ctrl_time = ctrl_time
-
     def resetSplineRef(self, ctrl_time: float = 0., const_ref=None) -> None:
         """[core] reset the spline; ctrl_time gives the *absolute* time (relating to mujoco's time state) of the spline knots"""
-        self.ctrlRef_poly = None
         self.ctrlRef_spline = ry.BSpline()
         if const_ref is None:
             cref = self.data.qpos[self.ctrl_indices]
@@ -219,14 +187,10 @@ class MujocoSim:
 
     def updateSplineRef(self, points: np.array, times: np.array, append: bool = False) -> None:
         """[core] set the spline; when overwriting, times are relative to the *current* ctrl_time"""
-        self.ctrlRef_poly = None
         if not append:
             self.ctrlRef_spline.overwriteSmooth(points, times, self.ctrl_time)
         else:
             raise NotImplementedError()
-
-    def updatePolyRef(self, delta, time_horizon):
-        raise NotImplementedError()
 
     def get_Jacobian(self, frame_name):
         body_id = mujoco.mj_name2id(self.model, 1, frame_name)
@@ -259,6 +223,13 @@ class MujocoSim:
                     freeobjs.append(f)
         return freeobjs
 
+    @property
+    def qpos_minus_offset(self) -> np.array:
+        if self.qpos_offset is not None:
+            return self.data.qpos-self.qpos_offset
+        else:
+            return self.data.qpos
+        
     @property
     def qpos_dim(self) -> int:
         return self.data.qpos.size
