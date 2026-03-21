@@ -73,7 +73,7 @@ class MujocoSim:
 
         # determine which qpos indices are controlled (actuated) joints
         self.ctrl_indices = []
-        for i in range(self.ctrl_dim):
+        for i in range(self.model.nu):
             id = self.model.actuator(i).trnid[0]
             qid = self.model.joint(id).qposadr
             self.ctrl_indices.append(int(qid[0]))
@@ -84,7 +84,7 @@ class MujocoSim:
         self.ctrlRef_spline = None
 
         # determine free objects and their non-zero offset in qpos
-        self.qpos_offset = np.zeros((self.data.qpos.size))
+        self.qpos_offset = np.zeros((self.model.nq))
         self.freeobjs = []
         for f in self.C.getFrames():
             parent = f.getParent()
@@ -98,12 +98,20 @@ class MujocoSim:
                         assert np.linalg.norm(quat - np.array([1,0,0,0]))<1e-10
                         qid = f.getJointQIndex()
                         self.qpos_offset[qid:qid+3] = offset
+        if self.warp_worlds>0:
+            self.qpos_offset = np.tile(self.qpos_offset, (self.warp_worlds, 1))
 
         print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim}) with {len(self.freeobjs)} free objects") # ctrl_indices:{self.ctrl_indices}
         
-        assert self.data.qpos.size == self.C.getJointDimension()
+        if self.warp_worlds>0:
+            assert self.data.qpos.size == self.C.getJointDimension() * self.warp_worlds
+        else:
+            assert self.data.qpos.size == self.C.getJointDimension()
 
-        self.set_state(self.C.getJointState())
+        if self.warp_worlds>0:
+            self.set_state(np.tile(self.C.getJointState(), (self.warp_worlds, 1)))
+        else:
+            self.set_state(self.C.getJointState())
 
     def __del__(self):
         if hasattr(self, "viewer") and self.viewer is not None:
@@ -140,7 +148,10 @@ class MujocoSim:
             if self.view_speed > 0.0 and (self.mj_steps%view_steps==0):
                 if self.use_mj_viewer:
                     self.viewer.sync()
-                self.C.setJointState(self._qpos)
+                if self.warp_worlds>0:
+                    self.C.setJointState(self._qpos[0])
+                else:
+                    self.C.setJointState(self._qpos)
                 self.C.view(False, f"sim t:{self.ctrl_time:6.3f}", offscreen=self.save_images)
                 if self.save_images:
                     self.saved_images.append(self.C.get_viewer().getRgb())
@@ -148,9 +159,10 @@ class MujocoSim:
 
         if self.warp_worlds>0:
             mjw.forward(self.wp_model, self.data)
+            self.C.setJointState(self._qpos[0])
         else:
             mujoco.mj_forward(self.model, self.data)
-        self.C.setJointState(self._qpos)
+            self.C.setJointState(self._qpos)
 
     def step(self, tau_step: float) -> None:
         """[core] step the physics engine for a given time, usually making multiple small (tau_sim) steps"""
@@ -158,9 +170,10 @@ class MujocoSim:
         assert math.isclose(tau_step, sim_steps * self.tau_sim), "tau_step needs to be a multiple of tau_sim"
         self.multi_step(sim_steps)
 
-    def set_state(self, qpos, qvel=None, act=None):
+    def set_state(self, qpos, qvel=None, act=None, world_id=-1):
         if self.warp_worlds==0:
             self.data.qpos = qpos + self.qpos_offset
+            self.C.setJointState(qpos)
             if qvel is None:
                 self.data.qvel *= 0.
             else:
@@ -171,7 +184,14 @@ class MujocoSim:
                 self.data.actuator_force = act
             mujoco.mj_forward(self.model, self.data)
         else:
-            self.data.qpos = wp.array((qpos + self.qpos_offset).reshape(self.warp_worlds, -1), dtype=wp.float32)
+            if world_id==-1:
+                qpos = qpos.reshape(self.warp_worlds, -1)
+                self.data.qpos = wp.array(qpos + self.qpos_offset, dtype=wp.float32)
+                self.C.setJointState(qpos[0])
+            else:
+                self.data.qpos[world_id] = wp.array(qpos + self.qpos_offset, dtype=wp.float32)
+                self.C.setJointState(qpos)
+
             if qvel is None:
                 self.data.qvel *= 0.
             else:
@@ -182,7 +202,6 @@ class MujocoSim:
                 self.data.actuator_force = wp.array(act.reshape(self.warp_worlds, -1), dtype=wp.float32)
             mjw.forward(self.wp_model, self.data)
 
-        self.C.setJointState(qpos)
 
     def get_ctrlRef(self):
         if self.ctrlRef_spline is not None:
@@ -288,12 +307,12 @@ class MujocoSim:
         
     @property
     def qpos_dim(self) -> int:
-        return self.data.qpos.size
+        return self.model.nq #self.data.qpos.size
     
     @property
     def qvel_dim(self) -> int:
-        return self.data.qvel.size
+        return self.model.nv #self.data.qvel.size
     
     @property
     def ctrl_dim(self) -> int:
-        return self.data.ctrl.size
+        return self.model.nu #self.data.ctrl.size

@@ -41,9 +41,16 @@ class MujocoGym(Env):
         self.goal_feat_map = goal_feat_map
         self.terminal_bounds = terminal_bounds
         self.num_scenes = num_scenes
-        self.scene_needs_reset = np.ones((num_scenes), dtype=bool)
-        self.scene_time = np.zeros((num_scenes))
-        self.ctrl_indices = self.sim.ctrl_indices.reshape(num_scenes, -1)[0]
+        self.num_worlds = 1
+        if self.sim.warp_worlds>0.:
+            self.num_worlds = self.sim.warp_worlds
+            self.num_scenes *= self.sim.warp_worlds
+            self.terminal_bounds = np.tile(self.terminal_bounds, (self.num_worlds, 1, 1))
+            self.terminal_bounds = np.transpose(self.terminal_bounds, (1, 0, 2))
+            self.terminal_bounds = np.reshape(self.terminal_bounds, (2, -1))
+        self.scene_needs_reset = np.ones((self.num_scenes), dtype=bool)
+        self.scene_time = np.zeros((self.num_scenes))
+        self.ctrl_indices = self.sim.ctrl_indices.reshape(self.num_scenes//self.num_worlds, -1)[0]
         self.ctrl_current = self.qpos[:, self.ctrl_indices].copy()
 
         # to get the first observatin, we need to setup a ctrlRef, get a goal feature, then query an observation
@@ -54,11 +61,11 @@ class MujocoGym(Env):
         # define the action space
         self.action_scale = self.cfg.action_scale_sqrttau*math.sqrt(self.cfg.tau_step)
         if self.cfg.eff_action is None:
-            action_dim = self.sim.ctrl_dim // num_scenes
+            action_dim = self.sim.ctrl_dim // (self.num_scenes//self.num_worlds)
         else:
             action_dim = 6
             self.q_home = self.qpos[:, self.ctrl_indices]
-        self.action_space = spaces.Box(-1., +1., shape=(num_scenes, action_dim), dtype=np.float32)
+        self.action_space = spaces.Box(-1., +1., shape=(self.num_scenes, action_dim), dtype=np.float32)
 
         # a counter to loop through provided starts/goals
         self.starts_goals_counter = 0
@@ -69,9 +76,9 @@ class MujocoGym(Env):
         assert starts_q.shape[0]==goals_q.shape[0]
         self.starts_goals_counter = 0
         self.starts_q = np.atleast_2d(starts_q)
-        self.starts_v = np.zeros((starts_q.shape[0], self.sim.qvel_dim//self.num_scenes))
+        self.starts_v = np.zeros((starts_q.shape[0], self.sim.qvel_dim//(self.num_scenes//self.num_worlds)))
         self.goals_q = np.atleast_2d(goals_q)
-        self.goals_v = np.zeros((goals_q.shape[0], self.sim.qvel_dim//self.num_scenes))
+        self.goals_v = np.zeros((goals_q.shape[0], self.sim.qvel_dim//(self.num_scenes//self.num_worlds)))
 
     def next_starts_goals_counter(self):
         i = self.starts_goals_counter % self.starts_q.shape[0]
@@ -103,7 +110,7 @@ class MujocoGym(Env):
                 needs_set = True
                 
         if needs_set:
-            self.sim.set_state(qpos.reshape(-1), qvel.reshape(-1), act.reshape(-1))
+            self.sim.set_state(qpos, qvel, act)
 
         return self.observation, {}
 
