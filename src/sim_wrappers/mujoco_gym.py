@@ -103,10 +103,7 @@ class MujocoGym(Env):
                 needs_set = True
                 
         if needs_set:
-            self.sim.data.qpos = qpos.reshape(-1) + self.sim.qpos_offset
-            self.sim.data.qvel = qvel.reshape(-1)
-            self.sim.data.actuator_force = act.reshape(-1)
-            mujoco.mj_forward(self.sim.model, self.sim.data)
+            self.sim.set_state(qpos.reshape(-1), qvel.reshape(-1), act.reshape(-1))
 
         return self.observation, {}
 
@@ -275,15 +272,15 @@ class MujocoGym(Env):
 
     @property
     def qpos(self) -> np.array:
-        return (self.sim.data.qpos-self.sim.qpos_offset).reshape(self.num_scenes, -1)
+        return self.sim._qpos.reshape(self.num_scenes, -1)
 
     @property
     def qvel(self) -> np.array:
-        return self.sim.data.qvel.reshape(self.num_scenes, -1)
+        return self.sim._qvel.reshape(self.num_scenes, -1)
 
     @property
     def act(self) -> np.array:
-        return self.sim.data.actuator_force.reshape(self.num_scenes, -1)
+        return self.sim._act.reshape(self.num_scenes, -1)
 
     def render(self):
         '''also part of the env.Gym'''

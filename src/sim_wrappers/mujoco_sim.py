@@ -2,14 +2,13 @@
 from typing import Optional
 from dataclasses import dataclass
 
-#from chex import Array
 import mujoco
 import mujoco.viewer
 import numpy as np
-import time
-import math
+import time, math
 import robotic as ry
-
+import mujoco_warp as mjw
+import warp as wp
 
 @dataclass
 class MjSimState:
@@ -37,14 +36,21 @@ class MujocoSim:
         self,
         xml_description: str,
         C: ry.Config,
+        tau_sim: float = 1e-3,
+        warp_worlds: int = 0,
         use_mj_viewer: bool = True,
-        tau_sim: float = 1e-3
     ):
         """
         Basic simulation class that wraps a mujoco simulator.
         """
         self.model = mujoco.MjModel.from_xml_string(xml_description)
-        self.data = mujoco.MjData(self.model)
+        if warp_worlds>0:
+            self.wp_model = mjw.put_model(self.model)
+            self.data = mjw.make_data(self.model, nworld=warp_worlds)
+        else:
+            self.model = mujoco.MjModel.from_xml_string(xml_description)
+            self.data = mujoco.MjData(self.model)
+        self.warp_worlds = warp_worlds
         self.tau_sim = tau_sim
         self.model.opt.timestep = self.tau_sim
         self.use_mj_viewer = use_mj_viewer
@@ -96,46 +102,32 @@ class MujocoSim:
         print(f"-- initialized MjSim with (controlled) joint dimension {C.getJointDimension()} (mj qpos:{self.data.qpos.size} qvel:{self.data.qvel.size} ctrl:{self.ctrl_dim}) with {len(self.freeobjs)} free objects") # ctrl_indices:{self.ctrl_indices}
         
         assert self.data.qpos.size == self.C.getJointDimension()
-        assert self.data.time == 0.
 
-        self.pushConfigToSim()
+        self.set_state(self.C.getJointState())
 
     def __del__(self):
         if hasattr(self, "viewer") and self.viewer is not None:
             self.viewer.close()
 
-    def pushConfigToSim(self):
-        """[internal] (re)set the mujoco state to be equal to the self.C state"""
-        self.data.qpos = self.C.getJointState() + self.qpos_offset
-
-        mujoco.mj_forward(self.model, self.data)
-
-        if self.use_mj_viewer:
-            self.viewer.sync()
-
-    def pullConfigFromSim(self):
-        """[interna] set selt.C state equal to mujoco state"""
-        self.C.setJointState(self.data.qpos - self.qpos_offset)
-
-    def get_ctrlRef(self):
-        if self.ctrlRef_spline is not None:
-            cref = self.ctrlRef_spline.eval3(self.ctrl_time)[0]
-        else:
-            raise Exception('you need to set a ctrl reference')
-        return cref
-
     def multi_step(self, num_steps: int) -> None:
         view_steps = math.ceil(0.02 / self.tau_sim * self.view_speed)
+        if self.warp_worlds>0 and isinstance(self.ctrl_buffer, np.ndarray):
+            wp_ctrl_buffer = wp.array(self.ctrl_buffer, dtype=wp.float32)
+
         for k in range(num_steps):
             assert self.ctrl_buffer is not None
             assert self.ctrl_buffer.shape[0]>self.ctrl_bufferPtr , 'ctrlRef buffer too small'
-            cref = self.ctrl_buffer[self.ctrl_bufferPtr]
+
+            if self.warp_worlds>0:
+                self.data.ctrl = wp_ctrl_buffer[self.ctrl_bufferPtr]
+            else:
+                self.data.ctrl = self.ctrl_buffer[self.ctrl_bufferPtr].reshape(-1)
             self.ctrl_bufferPtr += 1
 
-            # cref = self.get_ctrlRef()
-            self.data.ctrl = cref.reshape(-1)
-
-            mujoco.mj_step(self.model, self.data)
+            if self.warp_worlds>0:
+                mjw.step(self.wp_model, self.data)
+            else:
+                mujoco.mj_step(self.model, self.data)
             self.mj_steps += 1
             self.ctrl_time += self.tau_sim
             self.ctrl_costs += np.sum(np.square(self.data.actuator_force))
@@ -148,14 +140,17 @@ class MujocoSim:
             if self.view_speed > 0.0 and (self.mj_steps%view_steps==0):
                 if self.use_mj_viewer:
                     self.viewer.sync()
-                self.pullConfigFromSim()
+                self.C.setJointState(self._qpos)
                 self.C.view(False, f"sim t:{self.ctrl_time:6.3f}", offscreen=self.save_images)
                 if self.save_images:
                     self.saved_images.append(self.C.get_viewer().getRgb())
                 time.sleep(view_steps * self.tau_sim / self.view_speed)
 
-        mujoco.mj_forward(self.model, self.data)
-        self.pullConfigFromSim()
+        if self.warp_worlds>0:
+            mjw.forward(self.wp_model, self.data)
+        else:
+            mujoco.mj_forward(self.model, self.data)
+        self.C.setJointState(self._qpos)
 
     def step(self, tau_step: float) -> None:
         """[core] step the physics engine for a given time, usually making multiple small (tau_sim) steps"""
@@ -163,6 +158,39 @@ class MujocoSim:
         assert math.isclose(tau_step, sim_steps * self.tau_sim), "tau_step needs to be a multiple of tau_sim"
         self.multi_step(sim_steps)
 
+    def set_state(self, qpos, qvel=None, act=None):
+        if self.warp_worlds==0:
+            self.data.qpos = qpos + self.qpos_offset
+            if qvel is None:
+                self.data.qvel *= 0.
+            else:
+                self.data.qvel = qvel
+            if act is None:
+                self.data.actuator_force *= 0.
+            else:
+                self.data.actuator_force = act
+            mujoco.mj_forward(self.model, self.data)
+        else:
+            self.data.qpos = wp.array((qpos + self.qpos_offset).reshape(self.warp_worlds, -1), dtype=wp.float32)
+            if qvel is None:
+                self.data.qvel *= 0.
+            else:
+                self.data.qvel = wp.array(qvel.reshape(self.warp_worlds, -1), dtype=wp.float32)
+            if act is None:
+                self.data.actuator_force *= 0.
+            else:
+                self.data.actuator_force = wp.array(act.reshape(self.warp_worlds, -1), dtype=wp.float32)
+            mjw.forward(self.wp_model, self.data)
+
+        self.C.setJointState(qpos)
+
+    def get_ctrlRef(self):
+        if self.ctrlRef_spline is not None:
+            cref = self.ctrlRef_spline.eval3(self.ctrl_time)[0]
+        else:
+            raise Exception('you need to set a ctrl reference')
+        return cref
+    
     def getState(self) -> MjSimState:
         """[core] get a state struct that allows exact reset"""
         return MjSimState(
@@ -175,17 +203,14 @@ class MujocoSim:
     def setState(self, state: MjSimState) -> None:
         """[core] set the state"""
         self.data.time = state.time
-        if self.qpos_offset is None:
-            self.data.qpos[:] = state.qpos
-        else:
-            self.data.qpos[:] = state.qpos + self.qpos_offset
+        self.data.qpos[:] = state.qpos + self.qpos_offset
         self.data.qvel[:] = state.qvel
         self.data.actuator_force[:] = state.act
         mujoco.mj_forward(self.model, self.data)
         self.ctrl_time = state.time
         if self.use_mj_viewer:
             self.viewer.sync()
-        self.pullConfigFromSim()
+        self.C.setJointState(self._qpos)
 
     def to_state(self, s: np.array) -> MjSimState:
         nq, nv = self.data.qpos.size, self.data.qvel.size
@@ -218,7 +243,7 @@ class MujocoSim:
         mujoco.mj_jac(self.model, self.data, Jpos, Jang, pos, body_id)
     
         if False: #test
-            self.pullConfigFromSim()
+            self.C.setJointState(self._qpos)
             y, J = self.C.eval(ry.FS.position, [frame_name])
             print(np.linalg.norm(pos-y))
             print(Jpos, '\n', J)
@@ -240,6 +265,27 @@ class MujocoSim:
                     freeobjs.append(f)
         return freeobjs
        
+    @property
+    def _qpos(self) -> np.array:
+        if self.warp_worlds>0:
+            return self.data.qpos.numpy() - self.qpos_offset
+        else:
+            return self.data.qpos - self.qpos_offset
+
+    @property
+    def _qvel(self) -> np.array:
+        if self.warp_worlds>0:
+            return self.data.qvel.numpy()
+        else:
+            return self.data.qvel
+
+    @property
+    def _act(self) -> np.array:
+        if self.warp_worlds>0:
+            return self.data.actuator_force.numpy()
+        else:
+            return self.data.actuator_force
+        
     @property
     def qpos_dim(self) -> int:
         return self.data.qpos.size
