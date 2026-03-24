@@ -55,7 +55,7 @@ class MujocoGym(Env):
 
         # to get the first observatin, we need to setup a ctrlRef, get a goal feature, then query an observation
         self.goal_feat = self.goal_feat_map(self.qpos, self.qvel)
-        self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.ctrl_current, self.goal_feat)
+        self.observation, self.feat = self.observation_fct(self.qpos, self.qvel, self.ctrl_current, self.goal_feat)
         self.observation_space = spaces.Box(-2., +2., shape=self.observation.shape, dtype=np.float32)
 
         # define the action space
@@ -70,7 +70,7 @@ class MujocoGym(Env):
         # a counter to loop through provided starts/goals
         self.starts_goals_counter = 0
         
-        print(f"-- initialized MjGym with observation dim {self.observation.shape} (qdim:{sim.qpos_dim}-4+qvel:{sim.qvel_dim}+ctrl:{sim.ctrl_dim}+goal:{feat.size}), action dim {action_dim} (pose_action={self.cfg.eff_action}), tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
+        print(f"-- initialized MjGym with observation dim {self.observation.shape} (qdim:{sim.qpos_dim}-4+qvel:{sim.qvel_dim}+ctrl:{sim.ctrl_dim}+goal:{self.feat.size}), action dim {action_dim} (pose_action={self.cfg.eff_action}), tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
 
     def set_starts_goals(self, starts_q: np.array, goals_q: np.array):
         assert starts_q.shape[0]==goals_q.shape[0]
@@ -103,7 +103,7 @@ class MujocoGym(Env):
                 cref = qpos[s:s+1, self.ctrl_indices]
                 self.ctrl_current[s] = cref
                 
-                self.observation[s], _ = self.observation_fct(qpos[s:s+1], qvel[s:s+1], cref, self.goal_feat[s:s+1], selected_scenes=[s])
+                self.observation[s], self.feat[s] = self.observation_fct(qpos[s:s+1], qvel[s:s+1], cref, self.goal_feat[s:s+1], selected_scenes=[s])
 
                 self.scene_needs_reset[s] = False
                 self.scene_time[s] = 0.
@@ -112,7 +112,7 @@ class MujocoGym(Env):
         if needs_set:
             self.sim.set_state(qpos, qvel, act)
 
-        return self.observation, {}
+        return self.observation, { 'feature': self.feat }
 
     def reset(self, seed=None, options=None):
         """resets all scenes in the env"""
@@ -151,9 +151,9 @@ class MujocoGym(Env):
         self.ctrl_current = self.sim.ctrl_buffer[self.sim.ctrl_bufferPtr]
   
         # get obs and truncation
-        self.observation, feat = self.observation_fct(self.qpos, self.qvel, self.ctrl_current, self.goal_feat)
-        reward = self.reward_fct(self.observation, feat)
-        terminated = self.is_goal(self.observation, feat)
+        self.observation, self.feat = self.observation_fct(self.qpos, self.qvel, self.ctrl_current, self.goal_feat)
+        reward = self.reward_fct(self.observation, self.feat)
+        terminated = self.is_goal(self.observation, self.feat)
         truncated = (self.scene_time >= self.cfg.time_limit) # terminated and truncated difference is super important
         if self.terminal_bounds is not None:
             truncated |= self.is_out_of_bound(self.qpos, self.qvel)
@@ -161,7 +161,7 @@ class MujocoGym(Env):
 
         if self.num_scenes==1: # for stable_baselines to work..
             reward = reward.item()
-        return self.observation, reward, terminated, truncated, {}
+        return self.observation, reward, terminated, truncated, { 'feature': self.feat }
 
     def reward_fct(self, obs, feat):
         # example method for a reward function -- this should be overloaded

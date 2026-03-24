@@ -138,7 +138,10 @@ class MujocoSim:
                 mujoco.mj_step(self.model, self.data)
             self.mj_steps += 1
             self.ctrl_time += self.tau_sim
-            self.ctrl_costs += np.sum(np.square(self.data.actuator_force))
+            if self.warp_worlds>0:
+                pass
+            else:
+                self.ctrl_costs += np.sum(np.square(self.data.actuator_force))
 
             # storing the path
             if self.save_qpos>0 and (self.mj_steps%self.save_qpos==0):
@@ -172,16 +175,16 @@ class MujocoSim:
 
     def set_state(self, qpos, qvel=None, act=None, world_id=-1):
         if self.warp_worlds==0:
-            self.data.qpos = qpos + self.qpos_offset
+            self.data.qpos = qpos.reshape(-1) + self.qpos_offset
             self.C.setJointState(qpos)
             if qvel is None:
                 self.data.qvel *= 0.
             else:
-                self.data.qvel = qvel
+                self.data.qvel = qvel.reshape(-1)
             if act is None:
                 self.data.actuator_force *= 0.
             else:
-                self.data.actuator_force = act
+                self.data.actuator_force = act.reshape(-1)
             mujoco.mj_forward(self.model, self.data)
         else:
             if world_id==-1:
