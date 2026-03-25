@@ -272,11 +272,14 @@ class MujocoSim:
 
         return Jpos, Jang
 
-    def get_position(self, frame_name):
-        body_id = mujoco.mj_name2id(self.model, 1, frame_name)
-        assert body_id>=0, f'frame name {frame_name} is not a mj body'
-        pos = self.data.xpos[body_id]
-        return pos
+    def get_position(self, frame_name, world_id=0):
+        if self.warp_worlds>0:
+            raise Exception('NIY')
+        else:
+            body_id = mujoco.mj_name2id(self.model, 1, frame_name)
+            assert body_id>=0, f'frame name {frame_name} is not a mj body'
+            pos = self.data.xpos[body_id]
+            return pos
 
     def get_free_objects(self):
         freeobjs = []

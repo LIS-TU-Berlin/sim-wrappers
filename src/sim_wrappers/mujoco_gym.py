@@ -201,7 +201,11 @@ class MujocoGym(Env):
         o_eff = np.empty((len(selected_scenes), len(self.cfg.observation_points), 3))
         for i,s in enumerate(selected_scenes):
             for j,name in enumerate(self.cfg.observation_points):
-                o_eff[i,j] = self.sim.get_position(f'{s}_{name}')
+                if self.num_scenes>1:
+                    n = f'{s}_{name}'
+                else:
+                    n = name
+                o_eff[i,j] = self.sim.get_position(n)
         return o_eff.reshape(len(selected_scenes), -1)
 
     def is_goal(self, obs, feat):
