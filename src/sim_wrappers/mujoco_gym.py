@@ -57,6 +57,7 @@ class MujocoGym(Env):
         self.goal_feat = self.goal_feat_map(self.qpos, self.qvel)
         self.observation, self.feat = self.observation_fct(self.qpos, self.qvel, self.ctrl_current, self.goal_feat)
         self.observation_space = spaces.Box(-2., +2., shape=self.observation.shape, dtype=np.float32)
+        self.single_observation_space = spaces.Box(-2., +2., shape=(self.observation.shape[1],), dtype=np.float32)
 
         # define the action space
         self.action_scale = self.cfg.action_scale_sqrttau*math.sqrt(self.cfg.tau_step)
@@ -66,9 +67,15 @@ class MujocoGym(Env):
             action_dim = 6
             self.q_home = self.qpos[:, self.ctrl_indices]
         self.action_space = spaces.Box(-1., +1., shape=(self.num_scenes, action_dim), dtype=np.float32)
+        self.single_action_space = spaces.Box(-1., +1., shape=(action_dim,), dtype=np.float32)
 
         # a counter to loop through provided starts/goals
         self.starts_goals_counter = 0
+
+        # for logging
+        self.total_steps = 0
+        self.total_eps = 0
+        self.total_reward = 0
         
         print(f"-- initialized MjGym with observation dim {self.observation.shape} (qdim:{sim.qpos_dim}-4+qvel:{sim.qvel_dim}+ctrl:{sim.ctrl_dim}+goal:{self.feat.size}), action dim {action_dim} (pose_action={self.cfg.eff_action}), tau step {self.cfg.tau_step}, and time limit {self.cfg.time_limit}")
 
@@ -158,6 +165,10 @@ class MujocoGym(Env):
         if self.terminal_bounds is not None:
             truncated |= self.is_out_of_bound(self.qpos, self.qvel)
         self.scene_needs_reset = np.logical_or(terminated, truncated)
+
+        self.total_steps += self.num_scenes
+        self.total_eps += np.count_nonzero(self.scene_needs_reset)
+        self.total_reward += np.sum(reward)
 
         if self.num_scenes==1: # for stable_baselines to work..
             reward = reward.item()

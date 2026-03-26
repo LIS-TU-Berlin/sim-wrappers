@@ -1,9 +1,11 @@
 from gymnasium_robotics.core import GoalEnv
 import gymnasium as gym
 from gymnasium import spaces
+from gymnasium.vector import VectorEnv
 from sim_wrappers import MujocoGym
 import numpy as np
-from stable_baselines3.common.envs import SimpleMultiObsEnv
+from stable_baselines3.common.vec_env.base_vec_env import VecEnv, VecEnvObs, VecEnvStepReturn, VecEnvIndices
+from typing import Any
 
 class MujocoGoalGym(GoalEnv):
     def __init__(self, org_env: MujocoGym):
@@ -58,6 +60,48 @@ class MujocoGoalGym(GoalEnv):
         reward = self.org_env.reward_fct(None, np.atleast_2d(achieved_goal))
 
         return reward
+
+
+class SB_VecGym(VecEnv):
+    def __init__(self, org_env: MujocoGym):
+        self.org_env = org_env
+        self.num_envs = org_env.num_scenes
+        self.action_space = org_env.single_action_space
+        self.observation_space = org_env.single_observation_space
+
+    def reset(self) -> VecEnvObs:
+        self.org_env.reset()
+        return self.org_env.observation
+
+    def step(self, actions: np.ndarray) -> VecEnvStepReturn:
+        observation, reward, terminated, truncated, _ = self.org_env.step(actions)
+
+        done = np.logical_or(terminated, truncated)
+        n = self.org_env.num_scenes
+        infos = [{}]*n
+        for i in range(n):
+            infos[i]["TimeLimit.truncated"] = truncated[i] and not terminated[i]
+            if done[i]:
+                infos[i]["terminal_observation"] = observation[i]
+        
+        self.org_env.auto_reset()
+
+        return self.org_env.observation, reward, done, infos
+
+    def step_async(self, actions: np.ndarray) -> None:
+        raise NotImplementedError()
+    def step_wait(self) -> VecEnvStepReturn:
+        raise NotImplementedError()
+    def close(self) -> None:
+        raise NotImplementedError()
+    def get_attr(self, attr_name: str, indices: VecEnvIndices = None) -> list[Any]:
+        raise NotImplementedError()
+    def set_attr(self, attr_name: str, value: Any, indices: VecEnvIndices = None) -> None:
+        raise NotImplementedError()
+    def env_method(self, method_name: str, *method_args, indices: VecEnvIndices = None, **method_kwargs) -> list[Any]:
+        raise NotImplementedError()
+    def env_is_wrapped(self, wrapper_class: type[gym.Wrapper], indices: VecEnvIndices = None) -> list[bool]:
+        raise NotImplementedError()
 
 
 class VectorGym(gym.Env):
