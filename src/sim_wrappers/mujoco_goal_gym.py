@@ -77,12 +77,11 @@ class SB_VecGym(VecEnv):
         observation, reward, terminated, truncated, _ = self.org_env.step(actions)
 
         done = np.logical_or(terminated, truncated)
-        n = self.org_env.num_scenes
-        infos = [{}]*n
-        for i in range(n):
-            infos[i]["TimeLimit.truncated"] = truncated[i] and not terminated[i]
-            if done[i]:
-                infos[i]["terminal_observation"] = observation[i]
+
+        infos = [{}]*self.org_env.num_scenes
+        for i in range(self.org_env.num_scenes):
+            infos[i]["TimeLimit.truncated"] = truncated[i] # and not terminated[i]
+            infos[i]["terminal_observation"] = observation[i]
         
         self.org_env.auto_reset()
 
